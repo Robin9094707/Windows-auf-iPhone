@@ -8,19 +8,30 @@ struct SettingsView: View {
     @EnvironmentObject var display: DisplayRouter
     @Environment(\.dismiss) private var dismiss
 
-    private var physicalRAMGB: Int { Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824) }
+    private let profile = DeviceProfile.current
+
+    static func gb(_ mb: Int) -> String {
+        let v = Double(mb) / 1024
+        return v == v.rounded() ? "\(Int(v)) GB" : String(format: "%.1f GB", v).replacingOccurrences(of: ".", with: ",")
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    Stepper("Prozessorkerne: \(model.cpuCount)", value: $model.cpuCount, in: 1...6)
+                    LabeledContent("Gerät", value: "\(profile.name) · \(profile.chip)")
+                    LabeledContent("Reserviert für Windows",
+                                   value: WinIOSBridge.shared.reservedGuestRamMB > 0
+                                       ? "\(Self.gb(Int(WinIOSBridge.shared.reservedGuestRamMB))) RAM" : "noch nicht (JIT inaktiv)")
+                }
+
+                Section {
+                    Stepper("Prozessorkerne: \(model.cpuCount) von \(profile.cpuCores)", value: $model.cpuCount, in: 1...min(6, max(1, profile.cpuCores)))
                     Picker("Arbeitsspeicher", selection: $model.ramMB) {
-                        Text("Automatisch (empfohlen)").tag(0)
-                        Text("2 GB").tag(2048)
-                        Text("3 GB").tag(3072)
-                        Text("4 GB").tag(4096)
-                        Text("4,5 GB").tag(4608)
+                        Text("Automatisch (\(Self.gb(profile.automaticRamMB)))").tag(0)
+                        ForEach(profile.ramChoices, id: \.self) { mb in
+                            Text(mb >= 8192 ? "\(Self.gb(mb)) (Maximum)" : Self.gb(mb)).tag(mb)
+                        }
                     }
                     Toggle("Netzwerk (Internet)", isOn: $model.networkEnabled)
                     Toggle("Ton & Mikrofon", isOn: $model.soundEnabled)
@@ -28,7 +39,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Virtuelle Maschine")
                 } footer: {
-                    Text("iPhone mit \(physicalRAMGB) GB RAM. Änderungen gelten beim nächsten Start von Windows.")
+                    Text("\(profile.name) mit \(profile.physicalMemoryGB) GB RAM und \(profile.cpuCores) Kernen (\(profile.performanceCores) Leistungskerne). Der RAM wird beim Aktivieren von JIT reserviert – eine Änderung gilt nach dem nächsten JIT-Start (App über StikDebug neu öffnen). 4 Kerne sind am flüssigsten; 6 nutzt zusätzlich die Effizienzkerne.")
                 }
 
                 Section {

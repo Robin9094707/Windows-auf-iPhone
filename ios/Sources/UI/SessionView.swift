@@ -217,6 +217,7 @@ struct SessionView: View {
 
                 panelSection("Treiber & Extras (nach der Installation)") {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
+                        panelAction("Windows optimieren (schneller)", "bolt.fill") { model.optimizeWindows() }
                         panelAction("Netzwerktreiber installieren", "network") { model.installNetworkDriver() }
                         panelAction("Zwischenablage-Sync einrichten", "arrow.left.arrow.right.square") { model.installClipboardSync() }
                     }

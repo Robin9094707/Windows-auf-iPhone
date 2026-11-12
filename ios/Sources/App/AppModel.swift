@@ -72,6 +72,9 @@ final class AppModel: ObservableObject {
         let bridge = WinIOSBridge.shared
         bridge.installTrapGuard()
         bridge.firmwarePath = store.bundledFirmwareURL?.path
+        // RAM is reserved (ledger-exempt) the moment JIT is acquired.
+        bridge.ramReservationMB = UInt64(max(0, ramMB))
+        DeviceProfile.current.applyToEngine()
         KeyboardController.shared.layout = keyboardLayout
         PointerController.shared.trackpadSpeed = trackpadSpeed
         bridge.onStateChanged = { [weak self] in
@@ -125,6 +128,7 @@ final class AppModel: ObservableObject {
         let b = WinIOSBridge.shared
         // StikDebug attached → grab the JIT region right away.
         if !b.isJITLive && b.isDebuggerAttached {
+            b.ramReservationMB = UInt64(max(0, ramMB))
             _ = b.tryAcquireJIT(true)
         }
         // OAuth / link bridge from Windows → Safari sheet
@@ -167,7 +171,8 @@ final class AppModel: ObservableObject {
     /// the Windows ISO while installing, otherwise the driver ISO.
     var dataDriveSource: URL? {
         if let iso = mountedISOURL, !store.hasDisk || store.diskLooksBlank { return iso }
-        return driverISOURL
+        // After installation: driver ISO, else any ISO – also carries iPhone-Optimieren.cmd.
+        return driverISOURL ?? mountedISOURL ?? store.isos.first?.url
     }
 
     func applyConfig() {
@@ -199,8 +204,8 @@ final class AppModel: ObservableObject {
             }
             return
         }
-        // Rufus-style setup options → autounattend.xml on the setup drive.
-        if let iso = mountedISOURL, store.hasReadableDrive(for: iso) {
+        // Rufus-style setup options → autounattend.xml (+ optimizer) on the data drive.
+        if let iso = dataDriveSource, store.hasReadableDrive(for: iso) {
             store.writeSetupOptions(SetupOptions.load(), for: iso)
         }
         applyConfig()
@@ -316,6 +321,15 @@ final class AppModel: ObservableObject {
         KeyboardController.shared.run([
             .combo([HID.lWin], HID.letter("r")!), .wait(0.8),
             .text(WindowsTools.installNetworkDriverCommand),
+            .combo([HID.lCtrl, HID.lShift], HID.enter),
+        ])
+    }
+
+    /// Runs iPhone-Optimieren.cmd from the data drive – elevated (confirm the UAC prompt).
+    func optimizeWindows() {
+        KeyboardController.shared.run([
+            .combo([HID.lWin], HID.letter("r")!), .wait(0.8),
+            .text(UnattendBuilder.optimizerLauncher),
             .combo([HID.lCtrl, HID.lShift], HID.enter),
         ])
     }

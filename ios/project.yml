@@ -105,6 +105,8 @@ targets:
       path: WindowsOnIPhone.entitlements
       properties:
         get-task-allow: true
+        com.apple.developer.kernel.increased-memory-limit: true
+        com.apple.developer.kernel.extended-virtual-addressing: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.windowsaufiphone.app

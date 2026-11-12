@@ -710,6 +710,35 @@ static size_t build_iort(Buf *tabs) {
     return start;
 }
 
+static struct {
+    char manufacturer[64], product[64], model_id[32], family[32], cpu_name[64], mem_type[16];
+    uint16_t cpu_max_mhz, mem_mts;
+} smb = {"Apple", "iPhone", "iPhone", "iPhone", "Apple Silicon", "LPDDR5X", 4000, 8533};
+
+static void smb_copy(char *dst, size_t cap, const char *src) {
+    if (!src || !*src) return;
+    size_t n = strlen(src);
+    if (n >= cap) n = cap - 1;
+    memcpy(dst, src, n);
+    dst[n] = 0;
+}
+
+void hv_smbios_set_device(const char *manufacturer, const char *product, const char *model_id,
+                          const char *family, const char *cpu_name, uint16_t cpu_max_mhz,
+                          const char *mem_type, uint16_t mem_mts) {
+    smb_copy(smb.manufacturer, sizeof smb.manufacturer, manufacturer);
+    smb_copy(smb.product, sizeof smb.product, product);
+    smb_copy(smb.model_id, sizeof smb.model_id, model_id);
+    smb_copy(smb.family, sizeof smb.family, family);
+    smb_copy(smb.cpu_name, sizeof smb.cpu_name, cpu_name);
+    smb_copy(smb.mem_type, sizeof smb.mem_type, mem_type);
+    if (cpu_max_mhz) smb.cpu_max_mhz = cpu_max_mhz;
+    if (mem_mts) smb.mem_mts = mem_mts;
+}
+
+/* SMBIOS string-set entry (string plus its NUL). */
+static void b_str(Buf *b, const char *s) { b_put(b, s, strlen(s) + 1); }
+
 static void build_smbios(HvFwCfg *fw, int ncpus, uint64_t ram_size) {
     Buf t = {0};
 
@@ -730,11 +759,11 @@ static void build_smbios(HvFwCfg *fw, int ncpus, uint64_t ram_size) {
         b_u8(&t, 6); /* Wake-up Type: Power Switch */
         b_u8(&t, 0); /* SKU */
         b_u8(&t, 5); /* Family */
-        b_put(&t, "Apple / WindowsiOS\0", 19);
-        b_put(&t, "iPhone Duo ARM64 PC\0", 20);
-        b_put(&t, "1.0\0", 4);
-        b_put(&t, "DUO-WIN11-ARM64\0", 16);
-        b_put(&t, "WindowsiOS\0", 11);
+        b_str(&t, smb.manufacturer);
+        b_str(&t, smb.product);
+        b_str(&t, smb.model_id);
+        b_str(&t, "WINIPHONE-0001");
+        b_str(&t, smb.family);
         b_u8(&t, 0);
     }
 
@@ -744,7 +773,7 @@ static void build_smbios(HvFwCfg *fw, int ncpus, uint64_t ram_size) {
         b_u8(&t, 21);
         b_u16(&t, 0x0300U);
         b_u8(&t, 1);    /* Manufacturer */
-        b_u8(&t, 0x1e); /* Tablet / Foldable */
+        b_u8(&t, 0x0b); /* Hand Held */
         b_u8(&t, 2);    /* Version */
         b_u8(&t, 0);
         b_u8(&t, 0);
@@ -757,8 +786,8 @@ static void build_smbios(HvFwCfg *fw, int ncpus, uint64_t ram_size) {
         b_u8(&t, 0);
         b_u8(&t, 0);
         b_u8(&t, 0);
-        b_put(&t, "Apple\0", 6);
-        b_put(&t, "iPhone19,4\0", 11);
+        b_str(&t, smb.manufacturer);
+        b_str(&t, smb.model_id);
         b_u8(&t, 0);
     }
 
@@ -775,8 +804,8 @@ static void build_smbios(HvFwCfg *fw, int ncpus, uint64_t ram_size) {
         b_u8(&t, 3);
         b_u8(&t, 0x8b);
         b_u16(&t, 100U);
-        b_u16(&t, 4000U);
-        b_u16(&t, 3600U);
+        b_u16(&t, smb.cpu_max_mhz);   /* Max Speed */
+        b_u16(&t, smb.cpu_max_mhz);   /* Current Speed */
         b_u8(&t, 0x41);
         b_u8(&t, 1);
         b_u16(&t, 0xffffU);
@@ -790,9 +819,9 @@ static void build_smbios(HvFwCfg *fw, int ncpus, uint64_t ram_size) {
         b_u8(&t, (uint8_t)ncpus);
         b_u16(&t, 0x0004U);
         b_u16(&t, 0x0101U);
-        b_put(&t, "SOC0\0", 5);
-        b_put(&t, "Apple / ARM\0", 12);
-        b_put(&t, "Apple A20 Pro (WindowsiOS JIT)\0", 31);
+        b_str(&t, "SOC0");
+        b_str(&t, smb.manufacturer);
+        b_str(&t, smb.cpu_name);
         b_u8(&t, 0);
     }
 
@@ -828,19 +857,19 @@ static void build_smbios(HvFwCfg *fw, int ncpus, uint64_t ram_size) {
         b_u8(&t, 0);
         b_u8(&t, 0x1e);
         b_u16(&t, 0x0080U);
-        b_u16(&t, 6400U);
+        b_u16(&t, smb.mem_mts);       /* Speed (MT/s) */
         b_u8(&t, 2);
         b_u8(&t, 0);
         b_u8(&t, 0);
         b_u8(&t, 0);
         b_u8(&t, 0);
         b_u32(&t, 0);
-        b_u16(&t, 6400U);
+        b_u16(&t, smb.mem_mts);       /* Configured Memory Speed */
         b_u16(&t, 1100U);
         b_u16(&t, 1100U);
         b_u16(&t, 1100U);
-        b_put(&t, "LPDDR5X\0", 8);
-        b_put(&t, "Apple\0", 6);
+        b_str(&t, smb.mem_type);
+        b_str(&t, smb.manufacturer);
         b_u8(&t, 0);
     }
 

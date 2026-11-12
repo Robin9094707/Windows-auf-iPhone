@@ -45,8 +45,12 @@ static NSString *const kFbShaderSource =
     uint32_t texW, texH;
     dispatch_source_t timer;
     _Atomic(uint64_t) framesPresented;
-    uint64_t lastHash;
+    BOOL forceFull;
+    BOOL pendingPresent;      /* changes uploaded but not yet presented (no drawable) */
     CGSize lastDrawableSize;
+    uint8_t *shadow;          /* last uploaded frame, to find changed bands */
+    size_t shadowLen;
+    uint32_t shadowStride;
 }
 - (instancetype)initWithDisplay:(HvFbDisplay *)display;
 - (void)setTargetLayer:(CAMetalLayer *)newLayer;
@@ -79,7 +83,7 @@ static NSString *const kFbShaderSource =
 - (void)setTargetLayer:(CAMetalLayer *)newLayer {
     os_unfair_lock_lock(&lock);
     layer = newLayer;
-    lastHash = 0;
+    forceFull = YES;
     lastDrawableSize = CGSizeZero;
     if (layer && device) {
         dispatch_block_t cfg = ^{
@@ -93,7 +97,12 @@ static NSString *const kFbShaderSource =
         if (!timer) {
             dispatch_queue_t q = dispatch_queue_create("me.ammaar.windowsios.fbmetal", DISPATCH_QUEUE_SERIAL);
             timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
+#if TARGET_OS_IPHONE
+            /* ProMotion: present up to 120 Hz (unchanged frames cost only a memcmp). */
+            dispatch_source_set_timer(timer, DISPATCH_TIME_NOW, NSEC_PER_SEC / 120, 1 * NSEC_PER_MSEC);
+#else
             dispatch_source_set_timer(timer, DISPATCH_TIME_NOW, NSEC_PER_SEC / 60, 2 * NSEC_PER_MSEC);
+#endif
             __weak HvFbMetalPresenter *weakSelf = self;
             dispatch_source_set_event_handler(timer, ^{
                 [weakSelf tick];
@@ -105,20 +114,6 @@ static NSString *const kFbShaderSource =
         timer = nil;
     }
     os_unfair_lock_unlock(&lock);
-}
-
-static uint64_t quick_frame_hash(const uint8_t *px, uint32_t w, uint32_t h, uint32_t stride) {
-    uint64_t hash = ((uint64_t)w << 32) ^ h ^ stride;
-    uint32_t step_y = h > 128 ? h / 128 : 1;
-    for (uint32_t y = 0; y < h; y += step_y) {
-        const uint64_t *row = (const uint64_t *)(px + (size_t)y * stride);
-        uint32_t qwords = (w * 4) / 8;
-        uint32_t step_x = qwords > 64 ? qwords / 64 : 1;
-        for (uint32_t x = 0; x < qwords; x += step_x) {
-            hash = (hash ^ row[x]) * 0x9e3779b97f4a7c15ull;
-        }
-    }
-    return hash ? hash : 1;
 }
 
 - (void)tick {
@@ -140,14 +135,11 @@ static uint64_t quick_frame_hash(const uint8_t *px, uint32_t w, uint32_t h, uint
             return;
         }
 
-        uint64_t hval = quick_frame_hash(px, w, h, stride);
         BOOL sizeChanged = !CGSizeEqualToSize(dsize, lastDrawableSize);
-        if (hval == lastHash && !sizeChanged && texW == w && texH == h) {
-            os_unfair_lock_unlock(&lock);
-            return;
-        }
+        BOOL full = forceFull || sizeChanged;
 
         if (!texture || texW != w || texH != h) {
+            full = YES;
             MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                                                                           width:w
                                                                                          height:h
@@ -158,16 +150,59 @@ static uint64_t quick_frame_hash(const uint8_t *px, uint32_t w, uint32_t h, uint
             texH = h;
         }
 
-        [texture replaceRegion:MTLRegionMake2D(0, 0, w, h)
-                   mipmapLevel:0
-                     withBytes:px
-                   bytesPerRow:stride];
-
-        id<CAMetalDrawable> drawable = [curLayer nextDrawable];
-        if (!drawable) {
+        /* Compare the whole frame in 16-row bands against what was uploaded last time and
+           upload only the changed runs – nothing (cursor, caret) is missed, little is copied. */
+        size_t need = (size_t)stride * h;
+        if (!shadow || shadowLen != need || shadowStride != stride) {
+            free(shadow);
+            shadow = malloc(need);
+            shadowLen = shadow ? need : 0;
+            shadowStride = stride;
+            full = YES;
+        }
+        if (!shadow) {
             os_unfair_lock_unlock(&lock);
             return;
         }
+        const uint32_t band = 16;
+        BOOL dirty = NO;
+        uint32_t runStart = UINT32_MAX;
+        for (uint32_t y = 0;; y += band) {
+            BOOL atEnd = y >= h;
+            BOOL changed = NO;
+            if (!atEnd) {
+                uint32_t rows = h - y < band ? h - y : band;
+                size_t off = (size_t)y * stride, len = (size_t)rows * stride;
+                if (full || memcmp(px + off, shadow + off, len) != 0) {
+                    memcpy(shadow + off, px + off, len);
+                    changed = YES;
+                }
+            }
+            if (changed && runStart == UINT32_MAX) runStart = y;
+            if (!changed && runStart != UINT32_MAX) {
+                uint32_t end = atEnd ? h : y;
+                [texture replaceRegion:MTLRegionMake2D(0, runStart, w, end - runStart)
+                           mipmapLevel:0
+                             withBytes:shadow + (size_t)runStart * stride
+                           bytesPerRow:stride];
+                runStart = UINT32_MAX;
+                dirty = YES;
+            }
+            if (atEnd) break;
+        }
+        if (!dirty && !full && !pendingPresent) {
+            os_unfair_lock_unlock(&lock);
+            return;
+        }
+        forceFull = NO;
+
+        id<CAMetalDrawable> drawable = [curLayer nextDrawable];
+        if (!drawable) {
+            pendingPresent = YES;
+            os_unfair_lock_unlock(&lock);
+            return;
+        }
+        pendingPresent = NO;
 
         float dstAspect = (float)(dsize.width / dsize.height);
         float srcAspect = (float)w / (float)h;
@@ -194,7 +229,6 @@ static uint64_t quick_frame_hash(const uint8_t *px, uint32_t w, uint32_t h, uint
         [cb presentDrawable:drawable];
         [cb commit];
 
-        lastHash = hval;
         lastDrawableSize = dsize;
         atomic_fetch_add_explicit(&framesPresented, 1, memory_order_relaxed);
         os_unfair_lock_unlock(&lock);

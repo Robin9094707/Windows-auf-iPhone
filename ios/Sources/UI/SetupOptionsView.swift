@@ -23,6 +23,7 @@ struct SetupOptionsCard: View {
             Toggle("Datenschutz-Fragen überspringen (alles aus)", isOn: $o.skipPrivacyQuestions)
             Toggle("BitLocker-Verschlüsselung verhindern (schneller)", isOn: $o.disableBitLocker)
             Toggle("Region & Tastatur wie auf dem iPhone", isOn: $o.regionLikeIPhone)
+            Toggle("Windows fürs iPhone optimieren (keine Animationen, weniger Hintergrunddienste)", isOn: $o.optimizeWindows)
             Text("Wird beim nächsten Start von Windows-Setup automatisch angewendet.")
                 .font(.caption).foregroundStyle(.white.opacity(0.6))
         }

@@ -145,7 +145,7 @@ final class MachineStore: ObservableObject {
     /// True if an up-to-date exFAT copy of the ISO exists.
     func hasReadableDrive(for iso: URL) -> Bool {
         let drive = readableDriveURL(for: iso)
-        guard unattendOffsets(for: iso) != nil else { return false }   // made by an older version
+        guard unattendOffsets(for: iso)?.count == UnattendBuilder.slotPaths.count else { return false }   // older version
         guard let d = try? drive.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
               let i = try? iso.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate else { return false }
         return d >= i

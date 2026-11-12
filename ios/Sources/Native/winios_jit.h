@@ -23,6 +23,10 @@ typedef struct WinIosDualMapping {
 #define WINIOS_JIT_DEFAULT_BYTES ((size_t)384u << 20) /* 384 MiB */
 
 void winios_jit_install_trap_handler(void);
+/* Guest RAM to reserve when JIT is acquired (MiB, 0 = automatic by device RAM). */
+void winios_jit_set_ram_target_mb(uint64_t mb);
+/* Physical memory of the device in MiB. */
+uint64_t winios_device_memory_mb(void);
 bool winios_jit_is_debugger_attached(void);
 bool winios_jit_acquire(size_t bytes, bool detach_after);
 bool winios_jit_is_live(void);

@@ -108,7 +108,7 @@ typedef struct HvStats {
 } HvStats;
 
 #if TARGET_OS_IPHONE
-#define HV_MAX_CPUS 4
+#define HV_MAX_CPUS 6   /* A19 Pro: 2 performance + 4 efficiency cores */
 #else
 #define HV_MAX_CPUS 8
 #endif

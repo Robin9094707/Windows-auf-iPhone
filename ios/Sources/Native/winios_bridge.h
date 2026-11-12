@@ -32,7 +32,14 @@ typedef void (^WinIOSStateCallback)(void);
 @property (nonatomic, assign) uint64_t requestedRamMB;         /* 0 = automatic */
 @property (nonatomic, copy, nullable) NSString *installerImagePath; /* optional read-only 2nd NVMe disk (ISO) */
 @property (nonatomic, copy, nullable) NSString *firmwarePath;
-@property (nonatomic, copy, nullable) NSString *driverImagePath;  /* optional read-only 3rd NVMe disk (driver ISO) */  /* UEFI code.fd (bundle fallback) */
+@property (nonatomic, copy, nullable) NSString *driverImagePath;
+/* Guest RAM reserved when JIT is acquired (MiB, 0 = automatic). Set before JIT. */
+@property (nonatomic, assign) uint64_t ramReservationMB;
+@property (nonatomic, readonly) uint64_t deviceMemoryMB;
+@property (nonatomic, readonly) uint64_t reservedGuestRamMB;
+/* Identity shown in Windows (System Information / Task Manager). */
+- (void)setDeviceProduct:(NSString *)product modelID:(NSString *)modelID cpuName:(NSString *)cpuName
+               cpuMaxMHz:(uint16_t)mhz memoryType:(NSString *)memType memoryMTs:(uint16_t)mts;  /* optional read-only 3rd NVMe disk (driver ISO) */  /* UEFI code.fd (bundle fallback) */
 @property (nonatomic, assign) BOOL networkEnabled;
 @property (nonatomic, assign) BOOL soundEnabled;
 @property (nonatomic, readonly) NSString *machineDirectoryPath;

@@ -87,17 +87,30 @@ static uint64_t g_guest_ram_bytes;
 static atomic_bool g_jit_live;
 static char g_status[256] = "Not initialized";
 
-static void prealloc_ledger_exempt_ram(void) {
-    if (g_guest_ram) return;
+static uint64_t g_ram_target_mb;
+
+void winios_jit_set_ram_target_mb(uint64_t mb) { g_ram_target_mb = mb; }
+
+uint64_t winios_device_memory_mb(void) {
     uint64_t phys_mem = 0;
     size_t len = sizeof phys_mem;
     sysctlbyname("hw.memsize", &phys_mem, &len, NULL, 0);
-    uint64_t phys_mb = phys_mem >> 20;
-    /* Size Guest RAM to fit comfortably within iOS 36-bit user VA ceiling alongside TXM JIT RX/RW + JIT tables */
-    static const uint64_t candidates_mb[] = {4608, 4096, 3584, 3072, 2560, 2048};
+    return phys_mem >> 20;
+}
+
+static void prealloc_ledger_exempt_ram(void) {
+    if (g_guest_ram) return;
+    uint64_t phys_mb = winios_device_memory_mb();
+    /* Automatic: 12 GB devices (iPhone 17 Pro / Pro Max) get 6 GB, 8 GB devices 4.5 GB.
+       Larger requests (up to 8 GB) come from the user; iOS keeps >= 3 GB for itself. */
+    uint64_t want = g_ram_target_mb;
+    if (!want) want = phys_mb >= 11000 ? 6144 : 4608;
+    static const uint64_t candidates_mb[] = {8192, 7168, 6144, 5120, 4608, 4096, 3584, 3072, 2560, 2048};
     for (size_t i = 0; i < sizeof(candidates_mb) / sizeof(candidates_mb[0]); i++) {
         uint64_t mb = candidates_mb[i];
-        if (phys_mb > 0 && mb + 2560 > phys_mb) continue;
+        if (mb > want) continue;
+        uint64_t reserve_for_ios = mb > 4608 ? 3072 : 2560;
+        if (phys_mb > 0 && mb + reserve_for_ios > phys_mb) continue;
         uint8_t *p = hv_alloc_no_footprint(mb << 20);
         if (p) {
             g_guest_ram = p;

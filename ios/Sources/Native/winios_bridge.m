@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #import "winios_bridge.h"
 
+#include "acpi.h"
 #include "hvsparse.h"
 #include "share.h"
 #include "winios_jit.h"
@@ -716,6 +717,27 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
     NSString *s = [NSString stringWithUTF8String:raw];
     free(raw);
     return s;
+}
+
+- (void)setRamReservationMB:(uint64_t)mb {
+    _ramReservationMB = mb;
+    winios_jit_set_ram_target_mb(mb);
+}
+
+- (uint64_t)deviceMemoryMB {
+    return winios_device_memory_mb();
+}
+
+- (uint64_t)reservedGuestRamMB {
+    uint64_t bytes = 0;
+    winios_jit_guest_ram(&bytes);
+    return bytes >> 20;
+}
+
+- (void)setDeviceProduct:(NSString *)product modelID:(NSString *)modelID cpuName:(NSString *)cpuName
+               cpuMaxMHz:(uint16_t)mhz memoryType:(NSString *)memType memoryMTs:(uint16_t)mts {
+    hv_smbios_set_device("Apple", product.UTF8String, modelID.UTF8String, "iPhone",
+                         cpuName.UTF8String, mhz, memType.UTF8String, mts);
 }
 
 - (void)setHostClipboardForGuest:(NSString *)text {
