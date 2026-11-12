@@ -35,6 +35,9 @@ final class AppModel: ObservableObject {
     @AppStorage("vm.network") var networkEnabled: Bool = true
     @AppStorage("vm.sound") var soundEnabled: Bool = true
     @AppStorage("vm.mountedISO") var mountedISO: String = ""
+    /// Driver ISO in the extra drive: "" = automatic (virtio-win*.iso), "-" = none.
+    @AppStorage("vm.driverISO") var driverISOSetting: String = ""
+    @AppStorage("input.longPressMenu") var longPressMenu: Bool = true
     @AppStorage("vm.autostart") var autostart: Bool = true
     @AppStorage("vm.isoBootKeys") var pressKeyForISOBoot: Bool = true
     @AppStorage("input.touchMode") var touchModeRaw: String = TouchMode.direct.rawValue
@@ -74,6 +77,7 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.sync() }
         }
         _ = DownloadManager.shared
+        ClipboardBridge.shared.start()
         sync()
         AppModel.current = self
         startPolling()
@@ -150,6 +154,14 @@ final class AppModel: ObservableObject {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
+    var driverISOURL: URL? {
+        if driverISOSetting == "-" { return nil }
+        let name = driverISOSetting.isEmpty ? (store.driverISO?.name ?? "") : driverISOSetting
+        guard !name.isEmpty, name != mountedISO else { return nil }
+        let url = store.isoDir.appendingPathComponent(name)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
     func applyConfig() {
         let b = WinIOSBridge.shared
         b.configuredCPUCount = Int32(cpuCount)
@@ -157,6 +169,7 @@ final class AppModel: ObservableObject {
         b.networkEnabled = networkEnabled
         b.soundEnabled = soundEnabled
         b.installerImagePath = mountedISOURL?.path
+        b.driverImagePath = driverISOURL?.path
         b.firmwarePath = store.bundledFirmwareURL?.path
     }
 
@@ -258,6 +271,20 @@ final class AppModel: ObservableObject {
             .combo([HID.lShift], HID.f(10)), .wait(2.5),
             .text("start ms-cxh:localonly"), .key(HID.enter),
         ])
+    }
+
+    /// Installs the VirtIO network driver (NetKVM) from the driver drive – elevated (UAC prompt).
+    func installNetworkDriver() {
+        KeyboardController.shared.run([
+            .combo([HID.lWin], HID.letter("r")!), .wait(0.8),
+            .text(WindowsTools.installNetworkDriverCommand),
+            .combo([HID.lCtrl, HID.lShift], HID.enter),
+        ])
+    }
+
+    /// Installs the clipboard helper inside Windows (needs network).
+    func installClipboardSync() {
+        openRun(WindowsTools.installClipboardCommand)
     }
 
     func openRun(_ command: String) {

@@ -76,6 +76,7 @@ typedef struct HvWinVirt {
     HvVirtioNet *net;
     HvNvme *nvme0;
     HvNvme *nvme1;
+    HvNvme *nvme2;
     HvXhci *usb;
     HvHda *hda;
     HvVirtioSnd *snd;
@@ -85,6 +86,8 @@ typedef struct HvWinVirt {
 } HvWinVirt;
 
 uint8_t *hv_alloc_no_footprint(uint64_t size);
+/* Attach an extra NVMe namespace (e.g. a read-only driver ISO) after the board is created. */
+void hv_winvirt_add_nvme(HvWinVirt *b, HvMachine *m, HvDisk *disk, const char *serial);
 int hv_winvirt_create(HvWinVirt *b, HvMachine *m, HvCpu *cpu, int ncpus, uint64_t ram_size,
                       void *prealloc_ram, const char *code_fd_path, const char *vars_fd_path,
                       HvDisk *disk0, HvDisk *disk1, const uint8_t mac[6], int enable_sound);

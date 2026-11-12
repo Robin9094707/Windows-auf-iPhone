@@ -439,6 +439,10 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
 
     _configuredRamMB = ramMB;
     _configuredCPUs = (_configuredCPUCount >= 1 && _configuredCPUCount <= 8) ? _configuredCPUCount : 4;
+    NSString *drivers = nil;
+    if (_driverImagePath.length && [[NSFileManager defaultManager] fileExistsAtPath:_driverImagePath]) {
+        drivers = _driverImagePath;
+    }
     NSString *installer = nil;
     if (_installerImagePath.length && [[NSFileManager defaultManager] fileExistsAtPath:_installerImagePath]) {
         installer = _installerImagePath;
@@ -461,6 +465,7 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
         .enable_sound = _soundEnabled ? 1 : 0,
         .log = 0,
         .stats_interval = 0,
+        .disk2 = drivers ? drivers.fileSystemRepresentation : NULL,
     };
 
     char err[256] = {0};
@@ -711,6 +716,22 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
     NSString *s = [NSString stringWithUTF8String:raw];
     free(raw);
     return s;
+}
+
+- (void)setHostClipboardForGuest:(NSString *)text {
+    hv_share_set_clipboard(text.UTF8String ?: "");
+}
+
+- (nullable NSString *)takeGuestClipboard {
+    char *raw = hv_share_take_clipboard();
+    if (!raw) return nil;
+    NSString *s = [NSString stringWithUTF8String:raw];
+    free(raw);
+    return s;
+}
+
+- (long)clipboardAgentSeenSeconds {
+    return _vmRunning ? hv_share_agent_seen() : -1;
 }
 
 - (BOOL)takeGuestOAuthDone {

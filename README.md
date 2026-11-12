@@ -40,7 +40,11 @@ Im Menü **⋯** während der Sitzung:
 - **Taste drücken** – für „Press any key to boot from CD“ (passiert beim ISO‑Boot auch automatisch).
 - **Anforderungen umgehen** – öffnet im Setup die Eingabeaufforderung und setzt die LabConfig‑Schlüssel (TPM, Secure Boot, RAM, CPU, Speicher).
 - **Lokales Konto** – überspringt den Microsoft‑Konto‑Zwang in der Ersteinrichtung.
-- Für Internet in Windows: *VirtIO‑Treiber* herunterladen, ISO einlegen und `NetKVM` installieren.
+- **Treiber**: Windows braucht für Festplatte, Tastatur, Maus und Ton **keine** zusätzlichen Treiber. Nur fürs **Internet** braucht es NetKVM: in der App *VirtIO‑Treiber* herunterladen – die ISO wird automatisch als **eigenes Treiber‑Laufwerk** eingelegt (zusätzlich zur Windows‑ISO). Nach der Installation: **⋯ → „Netzwerktreiber installieren“** (Admin‑Abfrage mit „Ja“ bestätigen).
+
+### Zwischenablage iPhone ↔ Windows
+- **Einfügen**: Lange auf eine Stelle in Windows drücken → **Einfügen** (oder Einfügen-Taste in der Tastenleiste / im ⋯-Panel).
+- Ohne Netzwerk wird der Text eingetippt; **mit** Netzwerktreiber: **⋯ → „Zwischenablage‑Sync einrichten“** – danach wird automatisch in beide Richtungen synchronisiert (startet mit Windows).
 
 ## Bedienung
 

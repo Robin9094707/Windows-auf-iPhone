@@ -31,12 +31,21 @@ struct SettingsView: View {
                     Text("iPhone mit \(physicalRAMGB) GB RAM. Änderungen gelten beim nächsten Start von Windows.")
                 }
 
-                Section("Laufwerk (ISO)") {
+                Section {
                     Picker("Eingelegtes ISO", selection: $model.mountedISO) {
                         Text("Keins").tag("")
                         ForEach(store.isos) { iso in Text(iso.name).tag(iso.name) }
                     }
+                    Picker("Treiber-Laufwerk", selection: $model.driverISOSetting) {
+                        Text("Automatisch (virtio-win)").tag("")
+                        Text("Keins").tag("-")
+                        ForEach(store.isos) { iso in Text(iso.name).tag(iso.name) }
+                    }
                     Toggle("Beim Booten von ISO automatisch Taste drücken", isOn: $model.pressKeyForISOBoot)
+                } header: {
+                    Text("Laufwerke (ISO)")
+                } footer: {
+                    Text("Das Treiber-Laufwerk erscheint in Windows als zusätzliches Laufwerk (z. B. E:). Darauf liegen die Netzwerktreiber unter NetKVM\\w11\\ARM64.")
                 }
 
                 Section {
@@ -49,13 +58,17 @@ struct SettingsView: View {
                             PointerController.shared.trackpadSpeed = model.trackpadSpeed
                         })
                     }
+                    Toggle("Langes Drücken: Menü (Einfügen, Kopieren …)", isOn: $model.longPressMenu)
+                    Toggle("Zwischenablage automatisch synchronisieren", isOn: Binding(
+                        get: { ClipboardBridge.shared.autoSync },
+                        set: { ClipboardBridge.shared.autoSync = $0; model.objectWillChange.send() }))
                     Picker("Windows-Tastaturlayout", selection: Binding(get: { model.keyboardLayout }, set: { model.keyboardLayout = $0 })) {
                         ForEach(WindowsKeyboardLayout.allCases) { l in Text(l.title).tag(l) }
                     }
                 } header: {
                     Text("Eingabe")
                 } footer: {
-                    Text("Tippen = Klick · Lange drücken / zwei Finger = Rechtsklick · Zwei Finger ziehen = Scrollen · Zoomen mit zwei Fingern · Drei Finger = Menü ein/aus. Maus, Trackpad, Apple Pencil, Bluetooth-Tastaturen und Controller werden unterstützt.")
+                    Text("Tippen = Klick · Lange drücken = Menü (Einfügen/Kopieren/Rechtsklick) · Zwei Finger tippen = Rechtsklick · Zwei Finger ziehen = Scrollen · Zoomen mit zwei Fingern · Drei Finger = Menü ein/aus. Maus, Trackpad, Apple Pencil, Bluetooth-Tastaturen und Controller werden unterstützt.")
                 }
 
                 Section {

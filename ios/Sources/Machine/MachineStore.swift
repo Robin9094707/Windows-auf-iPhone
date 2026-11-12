@@ -102,19 +102,49 @@ final class MachineStore: ObservableObject {
             try? fm.createDirectory(at: d, withIntermediateDirectories: true)
         }
         writeReadme()
+        WindowsTools.install(into: sharedDir)
         refresh()
+    }
+
+    /// True if the file is an ISO-9660 image ("CD001" at sector 16), whatever its name.
+    nonisolated static func isISO9660(_ url: URL) -> Bool {
+        guard let h = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? h.close() }
+        do {
+            try h.seek(toOffset: 0x8001)
+            let d = try h.read(upToCount: 5) ?? Data()
+            return d == Data("CD001".utf8)
+        } catch { return false }
+    }
+
+    /// The driver ISO (virtio-win) if one is in ISOs/.
+    var driverISO: MachineFile? {
+        isos.first { $0.name.lowercased().contains("virtio") }
     }
 
     // MARK: Scanning
 
     func refresh() {
         sweepImportFolders()
+        rescueMisplacedISO()
         files = list(machineDir)
-        isos = list(isoDir).filter { $0.kind == .iso }
+        isos = list(isoDir).filter { $0.kind == .iso || Self.isISO9660($0.url) }
         if let v = try? documents.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
            let cap = v.volumeAvailableCapacityForImportantUsage {
             freeBytes = cap
         }
+    }
+
+    /// An installer ISO that ended up as the system disk can't be installed onto:
+    /// move it to ISOs/ so a fresh empty disk can be created.
+    private func rescueMisplacedISO() {
+        guard fm.fileExists(atPath: diskURL.path), Self.isISO9660(diskURL) else { return }
+        let dest = isoDir.appendingPathComponent("Windows11.iso")
+        try? fm.removeItem(at: dest)
+        do {
+            try fm.moveItem(at: diskURL, to: dest)
+            lastError = "Die Windows-Festplatte war in Wirklichkeit die Installations-ISO – deshalb hat Setup keine Festplatte gefunden. Die ISO liegt jetzt unter „ISOs“. Tippe auf „Installation aus ISO“, um eine leere Festplatte anzulegen."
+        } catch {}
     }
 
     private func list(_ dir: URL) -> [MachineFile] {
@@ -155,7 +185,8 @@ final class MachineStore: ObservableObject {
             }
         }
         for url in candidates {
-            let kind = Self.classify(url)
+            var kind = Self.classify(url)
+            if kind != .iso && kind != .sparseImage && Self.isISO9660(url) { kind = .iso }
             guard kind != .other, kind != .unsupported else { continue }
             guard let dest = destination(for: url, kind: kind) else { continue }
             if fm.fileExists(atPath: dest.path) {
@@ -194,7 +225,10 @@ final class MachineStore: ObservableObject {
         }
         // Unknown extension: decide by size – large files are disk images.
         var effectiveKind = kind
-        if kind == .other {
+        let scoped = src.startAccessingSecurityScopedResource()
+        if kind != .iso && kind != .sparseImage && Self.isISO9660(src) { effectiveKind = .iso }
+        if scoped { src.stopAccessingSecurityScopedResource() }
+        if effectiveKind == .other {
             let size = (try? src.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             effectiveKind = size > (512 << 20) ? .diskImage : .other
         }

@@ -153,6 +153,28 @@ struct SessionView: View {
     private var actionPanel: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                panelSection("Zwischenablage") {
+                    HStack(spacing: 8) {
+                        PasteButton(payloadType: String.self) { strings in
+                            let text = strings.joined(separator: "\n")
+                            DispatchQueue.main.async {
+                                showPanel = false
+                                ClipboardBridge.shared.paste(text)
+                            }
+                        }
+                        .buttonBorderShape(.roundedRectangle(radius: 14))
+                        .labelStyle(.titleAndIcon)
+                        .tint(Theme.accent)
+                        .frame(minHeight: 48)
+                        panelAction("Kopieren", "doc.on.doc") { ClipboardBridge.shared.copyInWindows() }
+                        panelAction("Ausschneiden", "scissors") { ClipboardBridge.shared.copyInWindows(cut: true) }
+                    }
+                    Text(ClipboardBridge.shared.isHelperActive
+                         ? "Sync aktiv: Kopieren in Windows landet automatisch auf dem iPhone und umgekehrt."
+                         : "Einfügen tippt den Text ein. Für echten Sync in beide Richtungen: unten „Zwischenablage-Sync einrichten“ (braucht Netzwerktreiber).")
+                        .font(.caption).foregroundStyle(.white.opacity(0.6))
+                }
+
                 panelSection("Funktionstasten") {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 6), spacing: 8) {
                         ForEach(1...12, id: \.self) { n in
@@ -190,6 +212,17 @@ struct SessionView: View {
                         panelAction("Datenträger 0 vorbereiten …", "externaldrive.badge.plus", destructive: true, closes: false) { confirmDiskPrep = true }
                         panelAction("Lokales Konto (ohne MS-Konto)", "person.crop.circle.badge.checkmark") { model.setupLocalAccount() }
                     }
+                }
+
+                panelSection("Treiber & Extras (nach der Installation)") {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
+                        panelAction("Netzwerktreiber installieren", "network") { model.installNetworkDriver() }
+                        panelAction("Zwischenablage-Sync einrichten", "arrow.left.arrow.right.square") { model.installClipboardSync() }
+                    }
+                    Text(model.driverISOURL != nil
+                         ? "Treiber-Laufwerk eingelegt: \(model.driverISOURL!.lastPathComponent)"
+                         : "Kein Treiber-Laufwerk: Lade in der App „VirtIO-Treiber“ herunter und starte Windows neu.")
+                        .font(.caption).foregroundStyle(.white.opacity(0.6))
                 }
 
                 panelSection("Anzeige") {
@@ -279,6 +312,13 @@ struct SessionView: View {
     private var keyBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                PasteButton(payloadType: String.self) { strings in
+                    let text = strings.joined(separator: "\n")
+                    DispatchQueue.main.async { ClipboardBridge.shared.paste(text) }
+                }
+                .labelStyle(.iconOnly)
+                .buttonBorderShape(.capsule)
+                .tint(Theme.accent)
                 keyCap("esc") { KeyboardController.shared.tap(HID.escape) }
                 keyCap("tab") { KeyboardController.shared.tap(HID.tab) }
                 stickyCap("strg", HID.lCtrl)

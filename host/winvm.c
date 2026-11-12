@@ -27,6 +27,7 @@ static int ncpus = 1;
 static HvWinVirt board;
 static HvDisk disk0 = {.fd = -1};
 static HvDisk disk1 = {.fd = -1};
+static HvDisk disk2 = {.fd = -1};
 static int net_on;
 static int share_on;
 static _Atomic int stop_requested;
@@ -187,6 +188,9 @@ int hv_winvm_create(const HvWinVmConfig *c, char *err, size_t errlen) {
     if (hv_winvirt_create(&board, &m, cpus, ncpus, ram_bytes, c->prealloc_ram, c->code_fd, c->vars_fd,
                           d0_ptr, d1_ptr, mac, c->enable_sound) != 0) {
         return fail(err, errlen, "Cannot create virtual ARM64 Windows board (insufficient RAM or missing firmware).");
+    }
+    if (c->disk2 && *c->disk2 && hv_disk_open(&disk2, c->disk2, 0, 1) == 0) {
+        hv_winvirt_add_nvme(&board, &m, &disk2, "WINDRIVERS");
     }
     hv_winvirt_reset_cpu(&board);
 

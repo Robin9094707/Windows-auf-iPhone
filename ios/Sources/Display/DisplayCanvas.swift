@@ -14,7 +14,7 @@ enum TouchMode: String, CaseIterable, Identifiable {
     var icon: String { self == .direct ? "hand.point.up.left.fill" : "rectangle.and.hand.point.up.left.fill" }
 }
 
-final class MetalCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
+final class MetalCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDelegate, UIEditMenuInteractionDelegate {
     override class var layerClass: AnyClass { CAMetalLayer.self }
     var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
 
@@ -42,6 +42,10 @@ final class MetalCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     private var pinchStartPan: CGPoint = .zero
     private var pinchStartCentroid: CGPoint = .zero
     private var isPinching = false
+
+    // Long-press edit menu (Einfügen / Kopieren / …)
+    private var editMenu: UIEditMenuInteraction?
+    private var menuPoint: (Double, Double) = (0.5, 0.5)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -102,6 +106,45 @@ final class MetalCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(handleHover(_:)))
         addGestureRecognizer(hover)
+
+        let menu = UIEditMenuInteraction(delegate: self)
+        addInteraction(menu)
+        editMenu = menu
+    }
+
+    private var longPressShowsMenu: Bool {
+        UserDefaults.standard.object(forKey: "input.longPressMenu") as? Bool ?? true
+    }
+
+    func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration,
+                             suggestedActions: [UIMenuElement]) -> UIMenu? {
+        let pt = menuPoint
+        let trackpad = effectiveTrackpad
+        let clickHere = {
+            if trackpad { PointerController.shared.clickAtCurrent(buttonMask: 1) }
+            else { PointerController.shared.directTapAt(x: pt.0, y: pt.1, buttonMask: 1) }
+        }
+        let paste = UIAction(title: "Einfügen", image: UIImage(systemName: "doc.on.clipboard")) { _ in
+            clickHere()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { ClipboardBridge.shared.pasteFromIPhone() }
+        }
+        let copy = UIAction(title: "Kopieren", image: UIImage(systemName: "doc.on.doc")) { _ in
+            ClipboardBridge.shared.copyInWindows()
+        }
+        let cut = UIAction(title: "Ausschneiden", image: UIImage(systemName: "scissors")) { _ in
+            ClipboardBridge.shared.copyInWindows(cut: true)
+        }
+        let selectAll = UIAction(title: "Alles auswählen", image: UIImage(systemName: "selection.pin.in.out")) { _ in
+            clickHere()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                KeyboardController.shared.combo([HID.lCtrl], HID.letter("a")!)
+            }
+        }
+        let right = UIAction(title: "Rechtsklick", image: UIImage(systemName: "cursorarrow.click.2")) { _ in
+            if trackpad { PointerController.shared.clickAtCurrent(buttonMask: 2) }
+            else { PointerController.shared.directTapAt(x: pt.0, y: pt.1, buttonMask: 2) }
+        }
+        return UIMenu(children: [paste, copy, cut, selectAll, right])
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
@@ -242,6 +285,15 @@ final class MetalCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     @objc private func handleLongPress(_ gr: UILongPressGestureRecognizer) {
         guard gr.state == .began else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        if longPressShowsMenu, let editMenu {
+            let loc = gr.location(in: self)
+            menuPoint = normalizedPoint(for: loc)
+            if !effectiveTrackpad {
+                PointerController.shared.moveAbsolute(x: menuPoint.0, y: menuPoint.1)
+            }
+            editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: loc))
+            return
+        }
         if effectiveTrackpad {
             PointerController.shared.clickAtCurrent(buttonMask: 2)
         } else {

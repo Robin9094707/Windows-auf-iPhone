@@ -24,6 +24,7 @@ typedef struct HvWinVmConfig {
     int enable_sound;
     int log;
     int stats_interval;
+    const char *disk2;        /* Optional extra read-only NVMe disk (driver ISO) */
 } HvWinVmConfig;
 
 int hv_winvm_create(const HvWinVmConfig *cfg, char *err, size_t errlen);

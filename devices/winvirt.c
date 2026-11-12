@@ -215,6 +215,11 @@ int hv_winvirt_create(HvWinVirt *b, HvMachine *m, HvCpu *cpu, int ncpus, uint64_
     return 0;
 }
 
+void hv_winvirt_add_nvme(HvWinVirt *b, HvMachine *m, HvDisk *disk, const char *serial) {
+    if (!b || !b->pcie || !disk || b->nvme2) return;
+    b->nvme2 = hv_nvme_create(m, b->pcie, disk, serial);
+}
+
 void hv_winvirt_reset_cpu(HvWinVirt *b) {
     /* Place fresh DTB at 0x40000000 for EDK2 ArmVirtQemu PrePi entry */
     if (b->ram && b->dtb && b->dtb_size <= b->ram_size) {

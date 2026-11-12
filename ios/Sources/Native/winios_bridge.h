@@ -31,7 +31,8 @@ typedef void (^WinIOSStateCallback)(void);
 @property (nonatomic, assign) int configuredCPUCount;          /* 1..8, default 4 */
 @property (nonatomic, assign) uint64_t requestedRamMB;         /* 0 = automatic */
 @property (nonatomic, copy, nullable) NSString *installerImagePath; /* optional read-only 2nd NVMe disk (ISO) */
-@property (nonatomic, copy, nullable) NSString *firmwarePath;  /* UEFI code.fd (bundle fallback) */
+@property (nonatomic, copy, nullable) NSString *firmwarePath;
+@property (nonatomic, copy, nullable) NSString *driverImagePath;  /* optional read-only 3rd NVMe disk (driver ISO) */  /* UEFI code.fd (bundle fallback) */
 @property (nonatomic, assign) BOOL networkEnabled;
 @property (nonatomic, assign) BOOL soundEnabled;
 @property (nonatomic, readonly) NSString *machineDirectoryPath;
@@ -41,6 +42,12 @@ typedef void (^WinIOSStateCallback)(void);
 @property (nonatomic, copy, nullable) WinIOSStateCallback onStateChanged;
 
 - (nullable NSString *)takeGuestOpenURL;
+
+/* Clipboard bridge (needs the helper script running in Windows + network) */
+- (void)setHostClipboardForGuest:(NSString *)text;
+- (nullable NSString *)takeGuestClipboard;
+/* Seconds since the Windows clipboard helper was last heard from, or -1. */
+- (long)clipboardAgentSeenSeconds;
 - (BOOL)takeGuestOAuthDone;
 
 - (void)installTrapGuard;
