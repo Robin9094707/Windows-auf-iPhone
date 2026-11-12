@@ -65,7 +65,7 @@ extension View {
     }
     #endif
 
-    func legacyGlass<S: Shape>(_ shape: S, tint: Color?) -> some View {
+    func legacyGlass<S: InsettableShape>(_ shape: S, tint: Color?) -> some View {
         self
             .background(.ultraThinMaterial, in: shape)
             .background((tint ?? .clear).opacity(0.35), in: shape)

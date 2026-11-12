@@ -86,7 +86,14 @@ jobs:
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build/xcodebuild.log | grep -E "error:|warning: .*(deprecated)?$|BUILD (SUCCEEDED|FAILED)|\*\* " || true
-          test -d build/DerivedData/Build/Products/Release-iphoneos/WindowsOnIPhone.app || { grep -n "error:" build/xcodebuild.log | head -80; tail -n 60 build/xcodebuild.log; exit 1; }
+          APP=build/DerivedData/Build/Products/Release-iphoneos/WindowsOnIPhone.app
+          if ! grep -q "BUILD SUCCEEDED" build/xcodebuild.log || [ ! -f "$APP/WindowsOnIPhone" ]; then
+            echo "::error::xcodebuild failed"
+            grep -n -A3 "error:" build/xcodebuild.log | head -150
+            tail -n 40 build/xcodebuild.log
+            exit 1
+          fi
+          ls -lh "$APP/WindowsOnIPhone" "$APP"/*.fd "$APP"/henge-jit.js
 
       - name: Package IPA (ad-hoc signed with get-task-allow for StikDebug)
         run: |
