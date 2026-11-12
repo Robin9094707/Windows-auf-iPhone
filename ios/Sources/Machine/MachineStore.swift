@@ -128,9 +128,24 @@ final class MachineStore: ObservableObject {
         drivesDir.appendingPathComponent(iso.deletingPathExtension().lastPathComponent + ".img")
     }
 
+    private func offsetsKey(_ drive: URL) -> String { "drive.unattendOffsets." + drive.lastPathComponent }
+
+    /// Byte offsets of the reserved autounattend.xml slots inside a converted drive.
+    func unattendOffsets(for iso: URL) -> [UInt64]? {
+        (UserDefaults.standard.array(forKey: offsetsKey(readableDriveURL(for: iso))) as? [NSNumber])?.map { $0.uint64Value }
+    }
+
+    /// Writes the Rufus-style answer file onto the setup drive made from this ISO.
+    @discardableResult
+    func writeSetupOptions(_ options: SetupOptions, for iso: URL) -> Bool {
+        guard let offs = unattendOffsets(for: iso), offs.contains(where: { $0 > 0 }) else { return false }
+        return UnattendBuilder.write(options, drive: readableDriveURL(for: iso), offsets: offs)
+    }
+
     /// True if an up-to-date exFAT copy of the ISO exists.
     func hasReadableDrive(for iso: URL) -> Bool {
         let drive = readableDriveURL(for: iso)
+        guard unattendOffsets(for: iso) != nil else { return false }   // made by an older version
         guard let d = try? drive.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
               let i = try? iso.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate else { return false }
         return d >= i
@@ -158,16 +173,25 @@ final class MachineStore: ObservableObject {
             let ctx = Unmanaged.passRetained(box).toOpaque()
             var err = [CChar](repeating: 0, count: 256)
             let errLen = err.count
-            let rc = hv_iso_to_exfat(iso.path, tmp.path, { done, total, opaque in
+            var offsets = [UInt64](repeating: 0, count: UnattendBuilder.slotPaths.count)
+            let cPaths = UnattendBuilder.slotPaths.map { strdup($0) }
+            var pathPtrs: [UnsafePointer<CChar>?] = cPaths.map { UnsafePointer($0) }
+            let rc = hv_iso_to_exfat_reserve(iso.path, tmp.path, &pathPtrs, Int32(cPaths.count), UnattendBuilder.slotSize,
+                                             &offsets, { done, total, opaque in
                 guard let opaque else { return }
                 Unmanaged<ProgressBox>.fromOpaque(opaque).takeUnretainedValue()
                     .report(total > 0 ? Double(done) / Double(total) : 0)
             }, ctx, &err, errLen)
+            cPaths.forEach { free($0) }
             Unmanaged<ProgressBox>.fromOpaque(ctx).release()
             var ok = rc == 0
             if ok {
                 try? FileManager.default.removeItem(at: dest)
                 ok = (try? FileManager.default.moveItem(at: tmp, to: dest)) != nil
+            }
+            if ok {
+                UserDefaults.standard.set(offsets.map { NSNumber(value: $0) }, forKey: "drive.unattendOffsets." + dest.lastPathComponent)
+                _ = UnattendBuilder.write(SetupOptions.load(), drive: dest, offsets: offsets)
             }
             let message = String(cString: err)
             Task { @MainActor in

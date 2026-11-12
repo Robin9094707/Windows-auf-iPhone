@@ -504,8 +504,57 @@ static int copy_files(Copy *cp, const Node *d) {
     return 0;
 }
 
+static int name_eq_ascii(const Node *n, const char *s, size_t len) {
+    if ((size_t)n->name_len != len) return 0;
+    for (size_t i = 0; i < len; i++) {
+        uint16_t a = n->name[i], b = (uint8_t)s[i];
+        if (a >= 'a' && a <= 'z') a -= 32;
+        if (b >= 'a' && b <= 'z') b -= 32;
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
+/* Adds (or replaces) a fixed-size file at "dir/name" (one directory level max, the directory
+   must exist). Its contents are filled with spaces; the caller rewrites them in place later. */
+static Node *reserve_file(Node *root, const char *path, uint64_t size) {
+    Node *dir = root;
+    const char *slash = strchr(path, '/');
+    if (slash) {
+        dir = NULL;
+        for (int i = 0; i < root->nkids; i++)
+            if (root->kids[i]->is_dir && name_eq_ascii(root->kids[i], path, (size_t)(slash - path))) dir = root->kids[i];
+        if (!dir) return NULL;
+        path = slash + 1;
+    }
+    size_t len = strlen(path);
+    Node *n = NULL;
+    for (int i = 0; i < dir->nkids; i++)
+        if (!dir->kids[i]->is_dir && name_eq_ascii(dir->kids[i], path, len)) n = dir->kids[i];
+    if (!n) {
+        n = node_new();
+        if (!n || add_kid(dir, n) != 0) return NULL;
+        for (size_t i = 0; i < len && i < 255; i++) n->name[i] = (uint8_t)path[i];
+        n->name_len = (int)(len < 255 ? len : 255);
+    }
+    free(n->ext); n->ext = NULL; n->next = n->cap_ext = 0;
+    free(n->inline_data);
+    n->inline_data = malloc((size_t)size);
+    if (!n->inline_data) return NULL;
+    memset(n->inline_data, ' ', (size_t)size);
+    n->size = size;
+    return n;
+}
+
 int hv_iso_to_exfat(const char *iso_path, const char *out_path, hv_iso_progress_fn progress, void *opaque,
                     char *err, size_t errlen) {
+    return hv_iso_to_exfat_reserve(iso_path, out_path, NULL, 0, 0, NULL, progress, opaque, err, errlen);
+}
+
+int hv_iso_to_exfat_reserve(const char *iso_path, const char *out_path,
+                            const char *const *reserve_paths, int nreserve, uint64_t reserve_size,
+                            uint64_t *reserve_offsets,
+                            hv_iso_progress_fn progress, void *opaque, char *err, size_t errlen) {
     Ctx c = {.fd = open(iso_path, O_RDONLY), .err = err, .errlen = errlen};
     if (c.fd < 0) return fail(&c, "ISO kann nicht geöffnet werden (%s)", strerror(errno));
     Node *root = node_new();
@@ -516,6 +565,12 @@ int hv_iso_to_exfat(const char *iso_path, const char *out_path, hv_iso_progress_
     root->is_dir = 1;
     if ((has_udf(&c) ? udf_parse(&c, root) : iso_parse(&c, root)) != 0) goto out;
     if (root->nkids == 0) { fail(&c, "Die ISO enthält keine Dateien"); goto out; }
+    Node *reserved[8] = {0};
+    if (nreserve > 8) nreserve = 8;
+    for (int i = 0; i < nreserve; i++) {
+        reserved[i] = reserve_file(root, reserve_paths[i], reserve_size);
+        if (reserve_offsets) reserve_offsets[i] = 0;
+    }
 
     build_upcase(fs);
     static uint16_t packed[65536 * 2];
@@ -636,6 +691,9 @@ int hv_iso_to_exfat(const char *iso_path, const char *out_path, hv_iso_progress_
     Copy cp = {.in = &c, .out = &o, .buf = big, .total = total_bytes(root), .progress = progress, .opaque = opaque};
     if (copy_files(&cp, root) != 0) goto ioerr;
     if (progress) progress(cp.total, cp.total, opaque);
+    for (int i = 0; i < nreserve; i++)
+        if (reserve_offsets && reserved[i] && reserved[i]->first_cluster)
+            reserve_offsets[i] = cluster_off(&o, reserved[i]->first_cluster);
     if (fsync(ofd) != 0) goto ioerr;
     ret = 0;
     goto out;

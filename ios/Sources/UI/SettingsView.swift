@@ -87,6 +87,12 @@ struct SettingsView: View {
                     Text("Per USB‑C‑auf‑HDMI‑Adapter oder AirPlay (Kontrollzentrum → Bildschirmsynchronisierung). Windows erscheint im Vollbild auf dem Monitor, dein iPhone wird zum Trackpad mit Tastatur.")
                 }
 
+                Section {
+                    SetupOptionsCard()
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
+                }
+
                 Section("Windows-Links") {
                     Toggle("Links aus Windows in Safari öffnen (Anmeldungen, Passkeys)", isOn: Binding(
                         get: { WinIOSBridge.shared.useSafariForGuestLinks },

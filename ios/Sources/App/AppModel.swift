@@ -199,6 +199,10 @@ final class AppModel: ObservableObject {
             }
             return
         }
+        // Rufus-style setup options → autounattend.xml on the setup drive.
+        if let iso = mountedISOURL, store.hasReadableDrive(for: iso) {
+            store.writeSetupOptions(SetupOptions.load(), for: iso)
+        }
         applyConfig()
         let b = WinIOSBridge.shared
         b.prepareAndStart(with: nil)
@@ -275,7 +279,7 @@ final class AppModel: ObservableObject {
     func setupStartFromDataDrive() {
         KeyboardController.shared.run([
             .combo([HID.lShift], HID.f(10)), .wait(2.5),
-            .text("for %d in (C D E F G H I J K L M N O P Q R S T U V W Y Z) do @if exist %d:\\sources\\install.* (start \"\" %d:\\setup.exe & exit)"),
+            .text("for %d in (C D E F G H I J K L M N O P Q R S T U V W Y Z) do @if exist %d:\\sources\\install.* (start \"\" %d:\\setup.exe /unattend:%d:\\autounattend.xml & exit)"),
             .key(HID.enter),
         ])
     }

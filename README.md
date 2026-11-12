@@ -35,6 +35,12 @@ Import/                            hier einfach Dateien ablegen
 Shared/                            in Windows erreichbar unter \\10.0.2.4
 ```
 
+### Wie bei Rufus
+Die App macht die Windows‑ISO beim ersten Start einmalig für Windows lesbar (exFAT‑Laufwerk) und legt eine `autounattend.xml` darauf. In **„Installation aus ISO“** bzw. den Einstellungen wählst du:
+- Anforderungen entfernen (TPM 2.0, Secure Boot, RAM, CPU)
+- Kein Microsoft‑Konto – lokales Konto mit Benutzername (ohne Passwort = automatische Anmeldung)
+- Datenschutzfragen überspringen · BitLocker verhindern · Region & Tastatur wie auf dem iPhone
+
 ### Windows‑Setup‑Helfer
 Im Menü **⋯** während der Sitzung:
 - **Taste drücken** – für „Press any key to boot from CD“ (passiert beim ISO‑Boot auch automatisch).

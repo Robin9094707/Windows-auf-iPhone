@@ -166,11 +166,13 @@ struct InstallSheet: View {
                         }
                         .padding(16).glassCard()
 
+                        SetupOptionsCard()
+
                         VStack(alignment: .leading, spacing: 8) {
                             Label("So geht's", systemImage: "list.number").font(.headline)
                             Text("1. Start drücken – die App tippt automatisch „Leertaste“, damit von der ISO gebootet wird.")
-                            Text("2. Im Setup über das Menü ⌘ → „Setup-Helfer: Anforderungen umgehen“ wählen (TPM/Secure Boot).")
-                            Text("3. Installation durchlaufen lassen. Bei der Einrichtung kannst du mit „Lokales Konto“ ohne Microsoft-Konto fortfahren.")
+                            Text("2. Die App macht die ISO einmalig für Windows lesbar (ein paar Minuten).")
+                            Text("3. Installation durchlaufen lassen – die Optionen oben werden automatisch angewendet.")
                             Text("4. Danach in den Einstellungen das ISO auswerfen.")
                         }
                         .font(.footnote)
