@@ -47,3 +47,4 @@ ios/WindowsOnIPhone.entitlements
 ios/Sources/Info.plist
 ios/Sources/Resources/Firmware/
 Payload/
+dist/
