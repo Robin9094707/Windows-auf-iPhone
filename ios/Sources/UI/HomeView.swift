@@ -41,13 +41,16 @@ struct HomeView: View {
             .refreshable { store.refresh(); model.sync() }
         }
         .sheet(item: $sheet) { which in
-            switch which {
-            case .files: LibraryView()
-            case .download: DownloadSheet()
-            case .settings: SettingsView()
-            case .jitGuide: JITGuideView()
-            case .install: InstallSheet()
+            Group {
+                switch which {
+                case .files: LibraryView()
+                case .download: DownloadSheet()
+                case .settings: SettingsView()
+                case .jitGuide: JITGuideView()
+                case .install: InstallSheet()
+                }
             }
+            .appEnvironment()
         }
         .background(DocumentPicker(isPresented: $showPicker) { urls in store.importFiles(urls) })
         .alert("Hinweis", isPresented: Binding(get: { store.lastError != nil }, set: { if !$0 { store.lastError = nil } })) {

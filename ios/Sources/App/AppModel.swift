@@ -63,6 +63,9 @@ final class AppModel: ObservableObject {
     private var pollTimer: Timer?
     private var didAutoLaunch = false
 
+    /// The single model instance (set at launch) for sheets that need it.
+    static var current: AppModel!
+
     init() {
         let bridge = WinIOSBridge.shared
         bridge.installTrapGuard()
@@ -74,6 +77,7 @@ final class AppModel: ObservableObject {
         }
         _ = DownloadManager.shared
         sync()
+        AppModel.current = self
         startPolling()
     }
 

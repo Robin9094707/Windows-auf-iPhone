@@ -34,13 +34,24 @@ struct WindowsOnIPhoneApp: App {
     }
 }
 
+extension View {
+    /// Re-injects the shared app objects (sheets and covers get them explicitly).
+    @MainActor
+    func appEnvironment() -> some View {
+        self.environmentObject(AppModel.current)
+            .environmentObject(MachineStore.shared)
+            .environmentObject(DownloadManager.shared)
+            .environmentObject(DisplayRouter.shared)
+    }
+}
+
 struct RootView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
         HomeView()
             .fullScreenCover(isPresented: $model.showSession) {
-                SessionView()
+                SessionView().appEnvironment()
             }
             .sheet(item: $model.activeSafariURL) { item in
                 SafariSheet(url: item.url).ignoresSafeArea()
