@@ -11,6 +11,7 @@ final class DisplayRouter: ObservableObject {
 
     @Published private(set) var externalConnected = false
     @Published private(set) var externalDescription = ""
+    @Published private(set) var externalPixelSize: CGSize = .zero
     @Published var preferExternal: Bool = UserDefaults.standard.object(forKey: "display.preferExternal") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(preferExternal, forKey: "display.preferExternal")
@@ -31,8 +32,9 @@ final class DisplayRouter: ObservableObject {
         rebind()
     }
 
-    func registerExternalLayer(_ layer: CAMetalLayer?, description: String) {
+    func registerExternalLayer(_ layer: CAMetalLayer?, description: String, pixelSize: CGSize = .zero) {
         externalLayer = layer
+        externalPixelSize = layer != nil ? pixelSize : .zero
         externalConnected = layer != nil
         externalDescription = layer != nil ? description : ""
         rebind()

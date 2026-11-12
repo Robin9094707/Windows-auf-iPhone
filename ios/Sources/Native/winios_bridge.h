@@ -35,6 +35,11 @@ typedef void (^WinIOSStateCallback)(void);
 @property (nonatomic, copy, nullable) NSString *driverImagePath;
 /* Guest RAM reserved when JIT is acquired (MiB, 0 = automatic). Set before JIT. */
 @property (nonatomic, assign) uint64_t ramReservationMB;
+/* Windows screen resolution (0x0 = firmware default 800x600). Applied at VM start. */
+@property (nonatomic, assign) uint32_t guestWidth;
+@property (nonatomic, assign) uint32_t guestHeight;
+/* vCPU threads at user-interactive QoS (P-cores first) instead of user-initiated. */
+@property (nonatomic, assign) BOOL maxPerformance;
 @property (nonatomic, readonly) uint64_t deviceMemoryMB;
 @property (nonatomic, readonly) uint64_t reservedGuestRamMB;
 /* Identity shown in Windows (System Information / Task Manager). */

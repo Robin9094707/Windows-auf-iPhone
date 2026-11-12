@@ -435,6 +435,8 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
 
     [self ensureVarsStore];
     NSString *codePath = [self resolvedFirmwarePath];
+    hv_fw_set_resolution(_guestWidth, _guestHeight);
+    if (_maxPerformance) setenv("HV_QOS", "ui", 1); else unsetenv("HV_QOS");
     NSString *varsPath = [dir stringByAppendingPathComponent:@"vars.fd"];
     NSString *diskPath = [dir stringByAppendingPathComponent:@"windows11.img"];
 

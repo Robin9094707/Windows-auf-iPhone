@@ -736,6 +736,13 @@ void hv_smbios_set_device(const char *manufacturer, const char *product, const c
     if (mem_mts) smb.mem_mts = mem_mts;
 }
 
+static uint32_t fw_resolution[2];
+
+void hv_fw_set_resolution(uint32_t width, uint32_t height) {
+    fw_resolution[0] = width;
+    fw_resolution[1] = height;
+}
+
 /* SMBIOS string-set entry (string plus its NUL). */
 static void b_str(Buf *b, const char *s) { b_put(b, s, strlen(s) + 1); }
 
@@ -1003,6 +1010,13 @@ void hv_acpi_build_and_register(HvFwCfg *fw, int ncpus, uint64_t ram_size, int s
     hv_fw_cfg_add_file(fw, "etc/table-loader", ldr.buf.buf, ldr.buf.len);
 
     build_smbios(fw, ncpus, ram_size);
+    if (fw_resolution[0] && fw_resolution[1]) {
+        /* Read by firmware/patch_ramfb.py's QemuRamfbDxe change (little-endian width, height). */
+        static uint32_t res[2];
+        res[0] = fw_resolution[0];
+        res[1] = fw_resolution[1];
+        hv_fw_cfg_add_file(fw, "opt/org.winiphone/resolution", res, sizeof res);
+    }
 
     free(tabs.buf);
     free(ldr.buf.buf);

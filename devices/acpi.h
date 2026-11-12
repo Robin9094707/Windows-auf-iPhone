@@ -16,4 +16,7 @@ void hv_smbios_set_device(const char *manufacturer, const char *product, const c
                           const char *family, const char *cpu_name, uint16_t cpu_max_mhz,
                           const char *mem_type, uint16_t mem_mts);
 
+/* Screen resolution the (patched) UEFI ramfb driver should use; 0x0 = firmware default. */
+void hv_fw_set_resolution(uint32_t width, uint32_t height);
+
 #endif

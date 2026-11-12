@@ -12,6 +12,48 @@
 
 #include "fb_display.h"
 
+/* Sharp upscaling: 9-tap Catmull-Rom bicubic (identity when the scale is 1:1). */
+static NSString *const kFbShaderSharp =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "struct VOut {\n"
+     "    float4 pos [[position]];\n"
+     "    float2 uv;\n"
+     "};\n"
+     "vertex VOut fb_vs(uint vid [[vertex_id]], constant float2 &scale [[buffer(0)]]) {\n"
+     "    const float2 quad[4] = { float2(-1,-1), float2(1,-1), float2(-1,1), float2(1,1) };\n"
+     "    const float2 uvs[4]  = { float2(0,1),   float2(1,1),  float2(0,0),  float2(1,0) };\n"
+     "    VOut o;\n"
+     "    o.pos = float4(quad[vid] * scale, 0.0, 1.0);\n"
+     "    o.uv  = uvs[vid];\n"
+     "    return o;\n"
+     "}\n"
+     "fragment float4 fb_fs(VOut in [[stage_in]], texture2d<float> tex [[texture(0)]]) {\n"
+     "    constexpr sampler s(mag_filter::linear, min_filter::linear, address::clamp_to_edge);\n"
+     "    float2 size = float2(tex.get_width(), tex.get_height());\n"
+     "    float2 p = in.uv * size;\n"
+     "    float2 t1 = floor(p - 0.5) + 0.5;\n"
+     "    float2 f = p - t1;\n"
+     "    float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));\n"
+     "    float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);\n"
+     "    float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));\n"
+     "    float2 w3 = f * f * (-0.5 + 0.5 * f);\n"
+     "    float2 w12 = w1 + w2;\n"
+     "    float2 t0 = (t1 - 1.0) / size;\n"
+     "    float2 t3 = (t1 + 2.0) / size;\n"
+     "    float2 t12 = (t1 + w2 / w12) / size;\n"
+     "    float3 c = tex.sample(s, float2(t0.x,  t0.y)).rgb  * (w0.x  * w0.y)\n"
+     "             + tex.sample(s, float2(t12.x, t0.y)).rgb  * (w12.x * w0.y)\n"
+     "             + tex.sample(s, float2(t3.x,  t0.y)).rgb  * (w3.x  * w0.y)\n"
+     "             + tex.sample(s, float2(t0.x,  t12.y)).rgb * (w0.x  * w12.y)\n"
+     "             + tex.sample(s, float2(t12.x, t12.y)).rgb * (w12.x * w12.y)\n"
+     "             + tex.sample(s, float2(t3.x,  t12.y)).rgb * (w3.x  * w12.y)\n"
+     "             + tex.sample(s, float2(t0.x,  t3.y)).rgb  * (w0.x  * w3.y)\n"
+     "             + tex.sample(s, float2(t12.x, t3.y)).rgb  * (w12.x * w3.y)\n"
+     "             + tex.sample(s, float2(t3.x,  t3.y)).rgb  * (w3.x  * w3.y);\n"
+     "    return float4(saturate(c), 1.0);\n"
+     "}\n";
+
 static NSString *const kFbShaderSource =
     @"#include <metal_stdlib>\n"
      "using namespace metal;\n"
@@ -66,14 +108,18 @@ static NSString *const kFbShaderSource =
         device = MTLCreateSystemDefaultDevice();
         if (device) {
             queue = [device newCommandQueue];
-            NSError *err = nil;
-            id<MTLLibrary> lib = [device newLibraryWithSource:kFbShaderSource options:nil error:&err];
-            if (lib) {
+            /* Sharp bicubic first; plain bilinear if that fails to compile on this GPU. */
+            NSArray<NSString *> *sources = @[kFbShaderSharp, kFbShaderSource];
+            for (NSString *src in sources) {
+                NSError *err = nil;
+                id<MTLLibrary> lib = [device newLibraryWithSource:src options:nil error:&err];
+                if (!lib) continue;
                 MTLRenderPipelineDescriptor *pd = [[MTLRenderPipelineDescriptor alloc] init];
                 pd.vertexFunction = [lib newFunctionWithName:@"fb_vs"];
                 pd.fragmentFunction = [lib newFunctionWithName:@"fb_fs"];
                 pd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
                 pipeline = [device newRenderPipelineStateWithDescriptor:pd error:&err];
+                if (pipeline) break;
             }
         }
     }

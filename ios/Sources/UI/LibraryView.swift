@@ -22,6 +22,7 @@ struct LibraryView: View {
                             section("Für Windows umgewandelt (exFAT)", files: store.drives,
                                     emptyText: "")
                         }
+                        cleanupCard
                         firmwareCard
                         howToCard
                     }
@@ -93,6 +94,15 @@ struct LibraryView: View {
                         .controlSize(.small)
                     }
                     Menu {
+                        if f.kind == .iso {
+                            Button {
+                                model.createDataDrive(for: f.url)
+                            } label: {
+                                Label(store.hasReadableDrive(for: f.url) ? "Für Windows lesbar (vorhanden)" : "Für Windows lesbar machen",
+                                      systemImage: "externaldrive.badge.plus")
+                            }
+                            .disabled(store.hasReadableDrive(for: f.url) || store.isConverting)
+                        }
                         ShareLink(item: f.url) { Label("Teilen / Exportieren", systemImage: "square.and.arrow.up") }
                         Button(role: .destructive) { confirmDelete = f } label: { Label("Löschen", systemImage: "trash") }
                     } label: {
@@ -111,6 +121,41 @@ struct LibraryView: View {
         if f.kind == .diskImage && f.allocated < f.size { s += " (belegt \(f.allocated.byteString))" }
         if f.kind == .iso && model.mountedISO == f.name { s += " · eingelegt" }
         return s
+    }
+
+    @State private var confirmCleanup: MachineStore.Cleanup?
+
+    private var cleanupCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Speicher bereinigen", systemImage: "sparkles").font(.headline)
+            ForEach(MachineStore.Cleanup.allCases) { c in
+                let size = store.cleanupSize(c)
+                Button { confirmCleanup = c } label: {
+                    HStack {
+                        Image(systemName: c.icon).foregroundStyle(Theme.accent).frame(width: 26)
+                        Text(c.title).foregroundStyle(.white)
+                        Spacer()
+                        Text(size > 0 ? size.byteString : "leer").font(.caption).foregroundStyle(.white.opacity(0.6))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(size == 0)
+            }
+            Text("Deine Windows-Festplatte und die ISOs werden dabei nicht angefasst.")
+                .font(.caption).foregroundStyle(.white.opacity(0.6))
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+        .confirmationDialog("„\(confirmCleanup?.title ?? "")“ löschen?",
+                            isPresented: Binding(get: { confirmCleanup != nil }, set: { if !$0 { confirmCleanup = nil } }),
+                            titleVisibility: .visible) {
+            Button("Löschen", role: .destructive) {
+                if let c = confirmCleanup { store.cleanup(c) }
+                confirmCleanup = nil
+            }
+        }
     }
 
     private var firmwareCard: some View {

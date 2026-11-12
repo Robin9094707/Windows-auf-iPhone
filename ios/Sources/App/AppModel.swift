@@ -38,6 +38,10 @@ final class AppModel: ObservableObject {
     /// Driver ISO in the extra drive: "" = automatic (virtio-win*.iso), "-" = none.
     @AppStorage("vm.driverISO") var driverISOSetting: String = ""
     @AppStorage("input.longPressMenu") var longPressMenu: Bool = true
+    @AppStorage("display.resolution") var resolutionRaw: String = DisplayResolution.sharp.rawValue
+    @AppStorage("perf.max") var maxPerformance: Bool = true
+    /// Attach a Windows-readable data drive (setup files, drivers, optimizer).
+    @AppStorage("vm.dataDrive") var dataDriveEnabled: Bool = true
     @AppStorage("vm.autostart") var autostart: Bool = true
     @AppStorage("vm.isoBootKeys") var pressKeyForISOBoot: Bool = true
     @AppStorage("input.touchMode") var touchModeRaw: String = TouchMode.direct.rawValue
@@ -169,44 +173,79 @@ final class AppModel: ObservableObject {
 
     /// The ISO whose files Windows must be able to read right now:
     /// the Windows ISO while installing, otherwise the driver ISO.
-    var dataDriveSource: URL? {
-        if let iso = mountedISOURL, !store.hasDisk || store.diskLooksBlank { return iso }
-        // After installation: driver ISO, else any ISO – also carries iPhone-Optimieren.cmd.
-        return driverISOURL ?? mountedISOURL ?? store.isos.first?.url
+    /// Installing Windows right now (setup ISO in the drive, system disk still empty)?
+    var isInstalling: Bool { mountedISOURL != nil && (!store.hasDisk || store.diskLooksBlank) }
+
+    /// The ISO whose Windows-readable copy is needed but missing – only while installing.
+    /// After installation nothing is ever converted automatically.
+    var dataDriveToCreate: URL? {
+        guard dataDriveEnabled, isInstalling, let iso = mountedISOURL, !store.hasReadableDrive(for: iso) else { return nil }
+        return iso
+    }
+
+    /// The converted drive attached as extra NVMe disk (existing drives only).
+    var dataDriveImage: URL? {
+        guard dataDriveEnabled else { return nil }
+        if isInstalling, let iso = mountedISOURL, store.hasReadableDrive(for: iso) {
+            return store.readableDriveURL(for: iso)
+        }
+        for iso in [driverISOURL, mountedISOURL].compactMap({ $0 }) where store.hasReadableDrive(for: iso) {
+            return store.readableDriveURL(for: iso)
+        }
+        return store.drives.first?.url
+    }
+
+    var resolution: DisplayResolution {
+        get { DisplayResolution(rawValue: resolutionRaw) ?? .sharp }
+        set { resolutionRaw = newValue.rawValue; objectWillChange.send() }
+    }
+
+    /// The resolution Windows will get at the next start.
+    var guestResolution: (UInt32, UInt32) {
+        let d = DisplayRouter.shared
+        if d.externalConnected && d.preferExternal && d.externalPixelSize.width > 0 {
+            return DisplayResolution.external(d.externalPixelSize)
+        }
+        return resolution.size
+    }
+
+    /// Explicitly makes an ISO readable for Windows (e.g. the driver ISO after installation).
+    func createDataDrive(for iso: URL) {
+        failedDataDrives.remove(iso)
+        store.makeReadableDrive(from: iso) { _ in }
     }
 
     func applyConfig() {
         let b = WinIOSBridge.shared
         b.configuredCPUCount = Int32(cpuCount)
+        let res = guestResolution
+        b.guestWidth = res.0
+        b.guestHeight = res.1
+        b.maxPerformance = maxPerformance
         b.requestedRamMB = UInt64(max(0, ramMB))
         b.networkEnabled = networkEnabled
         b.soundEnabled = soundEnabled
         b.installerImagePath = mountedISOURL?.path
-        if let src = dataDriveSource, store.hasReadableDrive(for: src) {
-            b.driverImagePath = store.readableDriveURL(for: src).path
-        } else {
-            b.driverImagePath = nil
-        }
+        b.driverImagePath = dataDriveImage?.path
         b.firmwarePath = store.bundledFirmwareURL?.path
     }
 
     func start() {
         didAutoLaunch = true
         // Windows can't read an ISO attached as a disk: give it an exFAT copy first.
-        if let src = dataDriveSource, !store.hasReadableDrive(for: src), !failedDataDrives.contains(src) {
+        if let src = dataDriveToCreate, !failedDataDrives.contains(src) {
             guard !store.isConverting else { return }
             vmStatusText = "Bereite Laufwerk für Windows vor …"
             store.makeReadableDrive(from: src) { [weak self] ok in
                 guard let self else { return }
-                if !ok { self.failedDataDrives.insert(src) }
-                // The driver drive is optional; the setup drive is required.
-                if ok || src != self.mountedISOURL { self.start() }
+                if !ok { self.failedDataDrives.insert(src); return }
+                self.start()
             }
             return
         }
         // Rufus-style setup options → autounattend.xml (+ optimizer) on the data drive.
-        if let iso = dataDriveSource, store.hasReadableDrive(for: iso) {
-            store.writeSetupOptions(SetupOptions.load(), for: iso)
+        if let drive = dataDriveImage {
+            store.writeSetupOptions(SetupOptions.load(), drive: drive)
         }
         applyConfig()
         let b = WinIOSBridge.shared

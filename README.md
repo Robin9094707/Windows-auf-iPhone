@@ -69,11 +69,17 @@ Im Menü **⋯** während der Sitzung:
 - **Shortcuts im Menü**: Strg+Alt+Entf, Alt+Tab, Task‑Manager, Explorer, Desktop, Einstellungen, Screenshot, Edge.
 - 120‑Hz‑ProMotion‑UI, Querformat‑Sperre, Leistungsanzeige.
 
+## Vollbild in iPhone‑Auflösung
+Windows läuft in einer Auflösung mit **exakt dem Seitenverhältnis des iPhones** und füllt den ganzen Bildschirm:
+**Nativ** (2864×1320 auf dem 17 Pro Max), **Scharf** (1912×880, Standard), **Flüssig** (1560×720) oder Klassisch (800×600).
+Dafür baut CI eine eigene EDK2‑Firmware (`firmware/`): ein kleiner Patch an `QemuRamfbDxe` liest die Wunschauflösung aus fw_cfg (`opt/org.winiphone/resolution`). Skaliert wird mit einem scharfen bikubischen (Catmull‑Rom) Filter.
+
 ## Leistung & iPhone‑17‑Pro‑Max‑Ausstattung
 - **RAM bis 8 GB**: automatisch 6 GB auf Geräten mit 12 GB (iPhone 17 Pro/Pro Max), wählbar bis 8 GB. Der Speicher wird beim Aktivieren von JIT „ledger‑exempt“ reserviert (zählt nicht gegen das iOS‑App‑Limit); zusätzlich sind `increased-memory-limit` und `extended-virtual-addressing` eingetragen (werden genutzt, wenn deine Signatur sie erlaubt).
 - **Bis zu 6 vCPUs** (A19 Pro: 2 Leistungs‑ + 4 Effizienzkerne; 4 sind meist am flüssigsten).
 - **Echte Gerätedaten in Windows** (Systeminformationen, Task‑Manager): Modell z. B. „iPhone 17 Pro Max“ (`iPhone18,2`), Prozessor „Apple A19 Pro“ mit Takt, LPDDR5X‑Speicher.
 - **Flüssigere Anzeige**: vollständiger Vergleich in 16‑Zeilen‑Streifen, nur geänderte Bereiche werden hochgeladen, Ausgabe mit bis zu 120 Hz (ProMotion).
+- **Leistungsmodus „Maximal“**: vCPU‑Threads mit höchster QoS (Leistungskerne zuerst).
 - **„Windows optimieren“** (⋯‑Panel oder automatisch bei der ersten Anmeldung): Höchstleistung, kein Ruhezustand, keine Animationen/Transparenz, SysMain/Indexer/Telemetrie aus, keine Hintergrund‑Apps, Widgets/Copilot aus, kein BitLocker.
 
 ## Einstellungen

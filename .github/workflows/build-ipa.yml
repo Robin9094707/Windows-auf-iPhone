@@ -15,8 +15,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  firmware:
+    name: Build UEFI firmware (EDK2 + iPhone resolution patch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache firmware
+        id: fw-cache
+        uses: actions/cache@v4
+        with:
+          path: firmware/out
+          key: fw-v1-${{ hashFiles('firmware/build_firmware.sh', 'firmware/patch_ramfb.py') }}
+
+      - name: Build firmware
+        if: steps.fw-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc-aarch64-linux-gnu acpica-tools nasm uuid-dev
+          ./firmware/build_firmware.sh
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: uefi-firmware
+          path: firmware/out/edk2-aarch64-code.fd
+          if-no-files-found: error
+
   build:
     name: Build WindowsOnIPhone.ipa
+    needs: firmware
     runs-on: macos-15
     timeout-minutes: 90
     env:
@@ -57,16 +87,14 @@ jobs:
           make -j"$(sysctl -n hw.ncpu)" ios-lib
           ls -lh build/ios/libwinvm.a
 
-      - name: Fetch UEFI firmware (EDK2 ArmVirtQemu, BSD-2-Clause-Patent)
-        run: |
-          mkdir -p ios/Sources/Resources/Firmware
-          OUT=ios/Sources/Resources/Firmware/edk2-aarch64-code.fd
-          if brew install qemu >/dev/null 2>&1 && [ -f "$(brew --prefix qemu)/share/qemu/edk2-aarch64-code.fd" ]; then
-            cp "$(brew --prefix qemu)/share/qemu/edk2-aarch64-code.fd" "$OUT"
-          else
-            curl -fL --retry 3 -o "$OUT" https://retrage.github.io/edk2-nightly/bin/RELEASEAARCH64_QEMU_EFI.fd
-          fi
-          ls -lh "$OUT"
+      - name: Get UEFI firmware (EDK2 ArmVirtQemu, BSD-2-Clause-Patent)
+        uses: actions/download-artifact@v4
+        with:
+          name: uefi-firmware
+          path: ios/Sources/Resources/Firmware
+
+      - name: Check firmware
+        run: ls -lh ios/Sources/Resources/Firmware/edk2-aarch64-code.fd
 
       - name: Generate Xcode project
         run: |

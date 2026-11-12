@@ -33,6 +33,7 @@ struct SettingsView: View {
                             Text(mb >= 8192 ? "\(Self.gb(mb)) (Maximum)" : Self.gb(mb)).tag(mb)
                         }
                     }
+                    Toggle("Leistungsmodus: Maximal (Leistungskerne zuerst)", isOn: $model.maxPerformance)
                     Toggle("Netzwerk (Internet)", isOn: $model.networkEnabled)
                     Toggle("Ton & Mikrofon", isOn: $model.soundEnabled)
                     Toggle("Automatisch starten, sobald JIT aktiv ist", isOn: $model.autostart)
@@ -53,10 +54,11 @@ struct SettingsView: View {
                         ForEach(store.isos) { iso in Text(iso.name).tag(iso.name) }
                     }
                     Toggle("Beim Booten von ISO automatisch Taste drücken", isOn: $model.pressKeyForISOBoot)
+                    Toggle("Daten-Laufwerk für Windows (Setup, Treiber, Optimierung)", isOn: $model.dataDriveEnabled)
                 } header: {
                     Text("Laufwerke (ISO)")
                 } footer: {
-                    Text("Das Treiber-Laufwerk erscheint in Windows als zusätzliches Laufwerk (z. B. E:). Darauf liegen die Netzwerktreiber unter NetKVM\\w11\\ARM64.")
+                    Text("Das Daten-Laufwerk wird nur bei einer Neuinstallation automatisch erstellt und danach nie wieder von selbst neu gebaut. Unter „Dateien“ kannst du es löschen oder für eine ISO gezielt erstellen. Es erscheint in Windows als zusätzliches Laufwerk (z. B. E:). Darauf liegen die Netzwerktreiber unter NetKVM\\w11\\ARM64.")
                 }
 
                 Section {
@@ -89,13 +91,16 @@ struct SettingsView: View {
                         Text(display.externalConnected ? display.externalDescription : "nicht verbunden")
                             .foregroundStyle(.secondary)
                     }
+                    Picker("Auflösung", selection: Binding(get: { model.resolution }, set: { model.resolution = $0 })) {
+                        ForEach(DisplayResolution.allCases) { r in Text(r.label()).tag(r) }
+                    }
                     Toggle("Windows auf externem Bildschirm zeigen", isOn: $display.preferExternal)
                     Toggle("Querformat sperren", isOn: $model.landscapeLock)
                     Toggle("Leistungsanzeige", isOn: $model.showStats)
                 } header: {
                     Text("Anzeige")
                 } footer: {
-                    Text("Per USB‑C‑auf‑HDMI‑Adapter oder AirPlay (Kontrollzentrum → Bildschirmsynchronisierung). Windows erscheint im Vollbild auf dem Monitor, dein iPhone wird zum Trackpad mit Tastatur.")
+                    Text("Die Auflösung hat genau das Seitenverhältnis deines iPhones – Windows füllt den ganzen Bildschirm, scharf skaliert. Gilt ab dem nächsten Windows-Start. Bei „Nativ“ in Windows die Skalierung auf 200–300 % stellen. Ist beim Start ein externer Bildschirm verbunden, bekommt Windows dessen Auflösung (bis 2560×1440).\n\nPer USB‑C‑auf‑HDMI‑Adapter oder AirPlay (Kontrollzentrum → Bildschirmsynchronisierung). Windows erscheint im Vollbild auf dem Monitor, dein iPhone wird zum Trackpad mit Tastatur.")
                 }
 
                 Section {

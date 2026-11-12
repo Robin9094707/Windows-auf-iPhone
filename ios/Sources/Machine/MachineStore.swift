@@ -130,25 +130,74 @@ final class MachineStore: ObservableObject {
 
     private func offsetsKey(_ drive: URL) -> String { "drive.unattendOffsets." + drive.lastPathComponent }
 
-    /// Byte offsets of the reserved autounattend.xml slots inside a converted drive.
-    func unattendOffsets(for iso: URL) -> [UInt64]? {
-        (UserDefaults.standard.array(forKey: offsetsKey(readableDriveURL(for: iso))) as? [NSNumber])?.map { $0.uint64Value }
+    /// Byte offsets of the reserved slots (autounattend.xml ×2, optimizer) inside a converted drive.
+    func unattendOffsets(drive: URL) -> [UInt64]? {
+        (UserDefaults.standard.array(forKey: offsetsKey(drive)) as? [NSNumber])?.map { $0.uint64Value }
     }
 
-    /// Writes the Rufus-style answer file onto the setup drive made from this ISO.
+    /// Writes the Rufus-style answer file and optimizer into a converted drive (if it has the slots).
     @discardableResult
-    func writeSetupOptions(_ options: SetupOptions, for iso: URL) -> Bool {
-        guard let offs = unattendOffsets(for: iso), offs.contains(where: { $0 > 0 }) else { return false }
-        return UnattendBuilder.write(options, drive: readableDriveURL(for: iso), offsets: offs)
+    func writeSetupOptions(_ options: SetupOptions, drive: URL) -> Bool {
+        guard let offs = unattendOffsets(drive: drive), offs.contains(where: { $0 > 0 }) else { return false }
+        return UnattendBuilder.write(options, drive: drive, offsets: offs)
     }
 
-    /// True if an up-to-date exFAT copy of the ISO exists.
+    /// True if a converted copy of the ISO exists. Never re-created automatically:
+    /// an existing drive is always reused (delete it under "Dateien" to rebuild).
     func hasReadableDrive(for iso: URL) -> Bool {
-        let drive = readableDriveURL(for: iso)
-        guard unattendOffsets(for: iso)?.count == UnattendBuilder.slotPaths.count else { return false }   // older version
-        guard let d = try? drive.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
-              let i = try? iso.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate else { return false }
-        return d >= i
+        fileSize(readableDriveURL(for: iso)) > (1 << 20)
+    }
+
+    // MARK: Cleanup
+
+    enum Cleanup: String, CaseIterable, Identifiable {
+        case drives, partials, importFolder, logs
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .drives: return "Umgewandelte Laufwerke"
+            case .partials: return "Unfertige Dateien (abgebrochen)"
+            case .importFolder: return "Import-Ordner"
+            case .logs: return "Screenshots & Protokolle"
+            }
+        }
+        var icon: String {
+            switch self {
+            case .drives: return "externaldrive.badge.xmark"
+            case .partials: return "doc.badge.ellipsis"
+            case .importFolder: return "tray.and.arrow.down"
+            case .logs: return "doc.text.magnifyingglass"
+            }
+        }
+    }
+
+    private func cleanupTargets(_ c: Cleanup) -> [URL] {
+        func items(_ dir: URL) -> [URL] {
+            (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+        }
+        switch c {
+        case .drives: return items(drivesDir)
+        case .partials:
+            return [machineDir, drivesDir, importDir, isoDir, documents].flatMap(items)
+                .filter { ["part", "unpacking"].contains($0.pathExtension) }
+        case .importFolder: return items(importDir)
+        case .logs:
+            return ["boot_status.txt", "latest_screen.png", "latest_screen.png.tmp", "StikDebug-JIT-Skript.js"]
+                .map { documents.appendingPathComponent($0) }.filter { fm.fileExists(atPath: $0.path) }
+        }
+    }
+
+    func cleanupSize(_ c: Cleanup) -> Int64 {
+        cleanupTargets(c).reduce(0) { $0 + max(allocatedSize($1), fileSize($1)) }
+    }
+
+    func cleanup(_ c: Cleanup) {
+        for url in cleanupTargets(c) {
+            try? fm.removeItem(at: url)
+            UserDefaults.standard.removeObject(forKey: offsetsKey(url))
+        }
+        lastMessage = "\(c.title) gelöscht."
+        refresh()
     }
 
     var isConverting: Bool { jobs.contains { $0.detail.hasPrefix("Bereite") || $0.name.hasPrefix("Laufwerk") } }
@@ -433,7 +482,9 @@ final class MachineStore: ObservableObject {
         do {
             if file.kind == .iso {          // its exFAT copy is useless without it
                 try? fm.removeItem(at: readableDriveURL(for: file.url))
+                UserDefaults.standard.removeObject(forKey: offsetsKey(readableDriveURL(for: file.url)))
             }
+            UserDefaults.standard.removeObject(forKey: offsetsKey(file.url))
             try fm.removeItem(at: file.url)
         } catch {
             lastError = error.localizedDescription

@@ -53,7 +53,7 @@ final class ExternalDisplaySceneDelegate: UIResponder, UIWindowSceneDelegate {
         let px = CGSize(width: screen.nativeBounds.width, height: screen.nativeBounds.height)
         let desc = "\(Int(px.width))×\(Int(px.height))"
         DispatchQueue.main.async {
-            DisplayRouter.shared.registerExternalLayer(vc.canvas.metalLayer, description: desc)
+            DisplayRouter.shared.registerExternalLayer(vc.canvas.metalLayer, description: desc, pixelSize: px)
         }
     }
 
