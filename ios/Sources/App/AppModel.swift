@@ -63,6 +63,7 @@ final class AppModel: ObservableObject {
     let store = MachineStore.shared
     private var pollTimer: Timer?
     private var didAutoLaunch = false
+    private var failedDataDrives: Set<URL> = []
 
     /// The single model instance (set at launch) for sheets that need it.
     static var current: AppModel!
@@ -162,6 +163,13 @@ final class AppModel: ObservableObject {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
+    /// The ISO whose files Windows must be able to read right now:
+    /// the Windows ISO while installing, otherwise the driver ISO.
+    var dataDriveSource: URL? {
+        if let iso = mountedISOURL, !store.hasDisk || store.diskLooksBlank { return iso }
+        return driverISOURL
+    }
+
     func applyConfig() {
         let b = WinIOSBridge.shared
         b.configuredCPUCount = Int32(cpuCount)
@@ -169,12 +177,28 @@ final class AppModel: ObservableObject {
         b.networkEnabled = networkEnabled
         b.soundEnabled = soundEnabled
         b.installerImagePath = mountedISOURL?.path
-        b.driverImagePath = driverISOURL?.path
+        if let src = dataDriveSource, store.hasReadableDrive(for: src) {
+            b.driverImagePath = store.readableDriveURL(for: src).path
+        } else {
+            b.driverImagePath = nil
+        }
         b.firmwarePath = store.bundledFirmwareURL?.path
     }
 
     func start() {
         didAutoLaunch = true
+        // Windows can't read an ISO attached as a disk: give it an exFAT copy first.
+        if let src = dataDriveSource, !store.hasReadableDrive(for: src), !failedDataDrives.contains(src) {
+            guard !store.isConverting else { return }
+            vmStatusText = "Bereite Laufwerk für Windows vor …"
+            store.makeReadableDrive(from: src) { [weak self] ok in
+                guard let self else { return }
+                if !ok { self.failedDataDrives.insert(src) }
+                // The driver drive is optional; the setup drive is required.
+                if ok || src != self.mountedISOURL { self.start() }
+            }
+            return
+        }
         applyConfig()
         let b = WinIOSBridge.shared
         b.prepareAndStart(with: nil)
@@ -244,6 +268,16 @@ final class AppModel: ObservableObject {
         var steps: [KeyboardController.MacroStep] = [.combo([HID.lShift], HID.f(10)), .wait(2.5)]
         for c in cmds { steps += [.text(c), .key(HID.enter), .wait(0.6)] }
         KeyboardController.shared.run(steps)
+    }
+
+    /// Fixes "Ein vom Computer benötigter Medientreiber fehlt": starts Setup from the
+    /// Windows-readable copy of the installation media.
+    func setupStartFromDataDrive() {
+        KeyboardController.shared.run([
+            .combo([HID.lShift], HID.f(10)), .wait(2.5),
+            .text("for %d in (C D E F G H I J K L M N O P Q R S T U V W Y Z) do @if exist %d:\\sources\\install.* (start \"\" %d:\\setup.exe & exit)"),
+            .key(HID.enter),
+        ])
     }
 
     /// Opens a command prompt (Shift+F10) and lists the disks with diskpart.

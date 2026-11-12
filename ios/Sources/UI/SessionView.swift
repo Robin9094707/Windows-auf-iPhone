@@ -207,6 +207,7 @@ struct SessionView: View {
                 panelSection("Windows-Installation") {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
                         panelAction("Taste drücken (von ISO booten)", "opticaldisc") { WinIOSBridge.shared.tapKeyHid(HID.space) }
+                        panelAction("„Medientreiber fehlt“ beheben", "externaldrive.badge.checkmark") { model.setupStartFromDataDrive() }
                         panelAction("Anforderungen umgehen (TPM …)", "wand.and.stars") { model.setupBypassRequirements() }
                         panelAction("Festplatten anzeigen (list disk)", "internaldrive") { model.setupListDisks() }
                         panelAction("Datenträger 0 vorbereiten …", "externaldrive.badge.plus", destructive: true, closes: false) { confirmDiskPrep = true }
@@ -220,7 +221,7 @@ struct SessionView: View {
                         panelAction("Zwischenablage-Sync einrichten", "arrow.left.arrow.right.square") { model.installClipboardSync() }
                     }
                     Text(model.driverISOURL != nil
-                         ? "Treiber-Laufwerk eingelegt: \(model.driverISOURL!.lastPathComponent)"
+                         ? "Treiber: \(model.driverISOURL!.lastPathComponent) (wird nach der Installation als Laufwerk eingelegt)"
                          : "Kein Treiber-Laufwerk: Lade in der App „VirtIO-Treiber“ herunter und starte Windows neu.")
                         .font(.caption).foregroundStyle(.white.opacity(0.6))
                 }

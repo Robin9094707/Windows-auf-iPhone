@@ -72,6 +72,9 @@ final class MachineStore: ObservableObject {
     let isoDir: URL
     let importDir: URL
     let sharedDir: URL
+    /// ISOs converted to exFAT disks that Windows can read (see iso2exfat.c).
+    let drivesDir: URL
+    @Published private(set) var drives: [MachineFile] = []
 
     var diskURL: URL { machineDir.appendingPathComponent("windows11.img") }
     var sparseURL: URL { machineDir.appendingPathComponent("windows11.hvsparse") }
@@ -98,7 +101,8 @@ final class MachineStore: ObservableObject {
         isoDir = documents.appendingPathComponent("ISOs", isDirectory: true)
         importDir = documents.appendingPathComponent("Import", isDirectory: true)
         sharedDir = documents.appendingPathComponent("Shared", isDirectory: true)
-        for d in [machineDir, isoDir, importDir, sharedDir] {
+        drivesDir = documents.appendingPathComponent("Laufwerke", isDirectory: true)
+        for d in [machineDir, isoDir, importDir, sharedDir, drivesDir] {
             try? fm.createDirectory(at: d, withIntermediateDirectories: true)
         }
         writeReadme()
@@ -117,6 +121,66 @@ final class MachineStore: ObservableObject {
         } catch { return false }
     }
 
+    // MARK: Windows-readable drives from ISOs
+
+    /// Where the exFAT copy of an ISO lives.
+    func readableDriveURL(for iso: URL) -> URL {
+        drivesDir.appendingPathComponent(iso.deletingPathExtension().lastPathComponent + ".img")
+    }
+
+    /// True if an up-to-date exFAT copy of the ISO exists.
+    func hasReadableDrive(for iso: URL) -> Bool {
+        let drive = readableDriveURL(for: iso)
+        guard let d = try? drive.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+              let i = try? iso.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate else { return false }
+        return d >= i
+    }
+
+    var isConverting: Bool { jobs.contains { $0.detail.hasPrefix("Bereite") || $0.name.hasPrefix("Laufwerk") } }
+
+    /// Converts an ISO into an exFAT disk Windows can read (once; takes a few minutes for 8 GB).
+    func makeReadableDrive(from iso: URL, completion: @escaping (Bool) -> Void) {
+        let dest = readableDriveURL(for: iso)
+        let isoSize = fileSize(iso)
+        if freeBytes > 0 && freeBytes < isoSize + (512 << 20) {
+            lastError = "Nicht genug Speicher: Für „\(iso.lastPathComponent)“ werden ca. \(isoSize.byteString) zusätzlich benötigt (frei: \(freeBytes.byteString))."
+            completion(false)
+            return
+        }
+        let job = ImportJob(name: "Laufwerk für Windows: \(iso.deletingPathExtension().lastPathComponent)", progress: 0, detail: "Bereite vor …")
+        jobs.append(job)
+        let jobID = job.id
+        DispatchQueue.global(qos: .userInitiated).async {
+            let tmp = dest.appendingPathExtension("part")
+            let box = ProgressBox { frac in
+                Task { @MainActor in MachineStore.shared.updateJob(jobID, progress: frac) }
+            }
+            let ctx = Unmanaged.passRetained(box).toOpaque()
+            var err = [CChar](repeating: 0, count: 256)
+            let errLen = err.count
+            let rc = hv_iso_to_exfat(iso.path, tmp.path, { done, total, opaque in
+                guard let opaque else { return }
+                Unmanaged<ProgressBox>.fromOpaque(opaque).takeUnretainedValue()
+                    .report(total > 0 ? Double(done) / Double(total) : 0)
+            }, ctx, &err, errLen)
+            Unmanaged<ProgressBox>.fromOpaque(ctx).release()
+            var ok = rc == 0
+            if ok {
+                try? FileManager.default.removeItem(at: dest)
+                ok = (try? FileManager.default.moveItem(at: tmp, to: dest)) != nil
+            }
+            let message = String(cString: err)
+            Task { @MainActor in
+                let store = MachineStore.shared
+                store.jobs.removeAll { $0.id == jobID }
+                if ok { store.lastMessage = "Laufwerk für Windows bereit." }
+                else { store.lastError = "Konnte „\(iso.lastPathComponent)“ nicht umwandeln: \(message.isEmpty ? "unbekannter Fehler" : message)" }
+                store.refresh()
+                completion(ok)
+            }
+        }
+    }
+
     /// The driver ISO (virtio-win) if one is in ISOs/.
     var driverISO: MachineFile? {
         isos.first { $0.name.lowercased().contains("virtio") }
@@ -129,6 +193,7 @@ final class MachineStore: ObservableObject {
         rescueMisplacedISO()
         files = list(machineDir)
         isos = list(isoDir).filter { $0.kind == .iso || Self.isISO9660($0.url) }
+        drives = list(drivesDir).filter { $0.url.pathExtension == "img" }
         if let v = try? documents.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
            let cap = v.volumeAvailableCapacityForImportantUsage {
             freeBytes = cap
@@ -342,6 +407,9 @@ final class MachineStore: ObservableObject {
 
     func delete(_ file: MachineFile) {
         do {
+            if file.kind == .iso {          // its exFAT copy is useless without it
+                try? fm.removeItem(at: readableDriveURL(for: file.url))
+            }
             try fm.removeItem(at: file.url)
         } catch {
             lastError = error.localizedDescription

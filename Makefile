@@ -79,7 +79,7 @@ IB = build/ios
 
 IOS_C_SRC = $(wildcard core/*.c) \
             host/jit_region.c host/disk.c host/winvm.c host/net_slirp.c host/share.c \
-            host/audio_mac.c host/hvsparse.c host/prof_ios.c \
+            host/audio_mac.c host/hvsparse.c host/prof_ios.c host/iso2exfat.c \
             $(wildcard devices/*.c)
 IOS_OBJ = $(patsubst %.c,$(IB)/%.o,$(IOS_C_SRC)) $(IB)/host/enter.o $(IB)/devices/fb_metal.o
 

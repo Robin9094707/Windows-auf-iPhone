@@ -18,6 +18,10 @@ struct LibraryView: View {
                         storageCard
                         section("Windows-Maschine", files: store.files, emptyText: "Noch keine Dateien. Importiere ein Image oder installiere aus einer ISO.")
                         section("ISO-Laufwerke", files: store.isos, emptyText: "Keine ISOs. Lade Windows 11 ARM64 oder Treiber herunter.")
+                        if !store.drives.isEmpty {
+                            section("Für Windows umgewandelt (exFAT)", files: store.drives,
+                                    emptyText: "")
+                        }
                         firmwareCard
                         howToCard
                     }

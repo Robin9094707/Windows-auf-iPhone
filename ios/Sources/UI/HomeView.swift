@@ -143,7 +143,7 @@ struct HomeView: View {
             }
             .glassProminentButton()
             .controlSize(.large)
-            .disabled(model.isUnpacking)
+            .disabled(model.isUnpacking || store.isConverting)
         }
         .padding(16)
         .glassCard(cornerRadius: 32)
