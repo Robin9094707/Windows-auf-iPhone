@@ -16,8 +16,9 @@ struct SessionView: View {
     @State private var confirmStop = false
     @State private var handle = CanvasHandle()
     @State private var hideTask: DispatchWorkItem?
+    @State private var showPanel = false
+    @State private var confirmDiskPrep = false
 
-    private let tick = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ZStack {
@@ -37,9 +38,18 @@ struct SessionView: View {
             if model.isUnpacking { unpackOverlay }
             if !model.isVMRunning && !model.isUnpacking { stoppedOverlay }
 
+            if showPanel {
+                // Tap outside closes the panel.
+                Color.black.opacity(0.35).ignoresSafeArea()
+                    .onTapGesture { showPanel = false }
+            }
+
             VStack(spacing: 10) {
                 if controlsVisible { controlBar.transition(.move(edge: .top).combined(with: .opacity)) }
-                if model.showStats && model.isVMRunning { statsPill }
+                if showPanel && controlsVisible {
+                    actionPanel.transition(.scale(scale: 0.96, anchor: .top).combined(with: .opacity))
+                }
+                if model.showStats && model.isVMRunning { StatsPill() }
                 Spacer()
                 if keyboardVisible { keyBar.transition(.move(edge: .bottom).combined(with: .opacity)) }
             }
@@ -63,6 +73,15 @@ struct SessionView: View {
         .defersSystemGestures(on: .all)
         .animation(.spring(response: 0.38, dampingFraction: 0.82), value: controlsVisible)
         .animation(.spring(response: 0.38, dampingFraction: 0.82), value: keyboardVisible)
+        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: showPanel)
+        .confirmationDialog("Datenträger 0 löschen und vorbereiten?", isPresented: $confirmDiskPrep, titleVisibility: .visible) {
+            Button("Datenträger 0 vorbereiten", role: .destructive) {
+                model.setupPrepareDisk0()
+                showPanel = false
+            }
+        } message: {
+            Text("Nur nutzen, wenn „list disk“ zeigt, dass Datenträger 0 deine leere Windows-Festplatte (~64 GB) ist. Alles darauf wird gelöscht.")
+        }
         .onAppear {
             if model.landscapeLock { OrientationLock.set(.landscape) }
             GamepadInput.shared.start()
@@ -72,7 +91,6 @@ struct SessionView: View {
             OrientationLock.set(.all)
             keyboardVisible = false
         }
-        .onReceive(tick) { _ in model.sync() }
         .confirmationDialog("Windows beenden?", isPresented: $confirmStop, titleVisibility: .visible) {
             Button("Herunterfahren (wie Ein/Aus-Taste)") { model.shutdownGracefully() }
             Button("Sofort ausschalten", role: .destructive) { model.forceStop() }
@@ -104,14 +122,11 @@ struct SessionView: View {
                 .frame(height: 44)
                 .glassCapsule()
 
-                Menu { moreMenu } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Circle())
+                GlassIconButton(systemName: showPanel ? "xmark" : "ellipsis", size: 44, active: showPanel) {
+                    showPanel.toggle()
+                    hideTask?.cancel()
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 }
-                .glassCircle()
 
                 GlassIconButton(systemName: "power", size: 44, tint: Theme.bad.opacity(0.6)) { confirmStop = true }
             }
@@ -133,47 +148,125 @@ struct SessionView: View {
         .buttonStyle(.plain)
     }
 
-    @ViewBuilder
-    private var moreMenu: some View {
-        Section("Tastenkombinationen") {
-            Button { WinIOSBridge.shared.sendCtrlAltDel() } label: { Label("Strg + Alt + Entf", systemImage: "lock.shield") }
-            Button { WinIOSBridge.shared.sendAltTab() } label: { Label("Alt + Tab", systemImage: "rectangle.on.rectangle") }
-            Button { KeyboardController.shared.combo([HID.lCtrl, HID.lShift], HID.escape) } label: { Label("Task-Manager", systemImage: "chart.bar.xaxis") }
-            Button { KeyboardController.shared.combo([HID.lWin], HID.letter("e")!) } label: { Label("Explorer", systemImage: "folder") }
-            Button { KeyboardController.shared.combo([HID.lWin], HID.letter("d")!) } label: { Label("Desktop anzeigen", systemImage: "menubar.dock.rectangle") }
-            Button { KeyboardController.shared.combo([HID.lWin], HID.letter("i")!) } label: { Label("Windows-Einstellungen", systemImage: "gearshape") }
-            Button { KeyboardController.shared.combo([HID.lWin, HID.lShift], HID.letter("s")!) } label: { Label("Screenshot-Tool", systemImage: "camera.viewfinder") }
-            Button { model.openRun("msedge") } label: { Label("Microsoft Edge", systemImage: "globe") }
-        }
-        Section("Anzeige") {
-            Button { handle.resetZoom(); zoom = 1 } label: { Label("Zoom zurücksetzen", systemImage: "arrow.up.left.and.down.right.magnifyingglass") }
-            Button { showFKeys.toggle(); keyboardVisible = true } label: { Label("F-Tasten", systemImage: "f.cursive") }
-            Button { model.showStats.toggle() } label: { Label(model.showStats ? "Leistung ausblenden" : "Leistung anzeigen", systemImage: "speedometer") }
-            if display.externalConnected {
-                Button { display.preferExternal.toggle() } label: {
-                    Label(display.preferExternal ? "Auf iPhone anzeigen" : "Auf externem Bildschirm", systemImage: "tv")
+    // MARK: Action panel (replaces the system dropdown – stays open, big touch targets)
+
+    private var actionPanel: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                panelSection("Funktionstasten") {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 6), spacing: 8) {
+                        ForEach(1...12, id: \.self) { n in
+                            panelKey("F\(n)") { KeyboardController.shared.tap(HID.f(n)) }
+                        }
+                        panelKey("Esc") { KeyboardController.shared.tap(HID.escape) }
+                        panelKey("Tab") { KeyboardController.shared.tap(HID.tab) }
+                        panelKey("Entf") { KeyboardController.shared.tap(HID.delete) }
+                        panelKey("Enter") { KeyboardController.shared.tap(HID.enter) }
+                        panelKey("⊞") { KeyboardController.shared.tap(HID.lWin) }
+                        panelKey("Druck") { KeyboardController.shared.tap(HID.printScreen) }
+                    }
+                }
+
+                panelSection("Tastenkombinationen") {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
+                        panelAction("⇧ + F10 (Eingabeaufforderung)", "terminal") { KeyboardController.shared.combo([HID.lShift], HID.f(10)) }
+                        panelAction("Strg + Alt + Entf", "lock.shield") { WinIOSBridge.shared.sendCtrlAltDel() }
+                        panelAction("Alt + Tab", "rectangle.on.rectangle") { WinIOSBridge.shared.sendAltTab() }
+                        panelAction("Alt + F4", "xmark.rectangle") { KeyboardController.shared.combo([HID.lAlt], HID.f(4)) }
+                        panelAction("Task-Manager", "chart.bar.xaxis") { KeyboardController.shared.combo([HID.lCtrl, HID.lShift], HID.escape) }
+                        panelAction("Explorer", "folder") { KeyboardController.shared.combo([HID.lWin], HID.letter("e")!) }
+                        panelAction("Desktop", "menubar.dock.rectangle") { KeyboardController.shared.combo([HID.lWin], HID.letter("d")!) }
+                        panelAction("Einstellungen", "gearshape") { KeyboardController.shared.combo([HID.lWin], HID.letter("i")!) }
+                        panelAction("Screenshot-Tool", "camera.viewfinder") { KeyboardController.shared.combo([HID.lWin, HID.lShift], HID.letter("s")!) }
+                        panelAction("Microsoft Edge", "globe") { model.openRun("msedge") }
+                    }
+                }
+
+                panelSection("Windows-Installation") {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
+                        panelAction("Taste drücken (von ISO booten)", "opticaldisc") { WinIOSBridge.shared.tapKeyHid(HID.space) }
+                        panelAction("Anforderungen umgehen (TPM …)", "wand.and.stars") { model.setupBypassRequirements() }
+                        panelAction("Festplatten anzeigen (list disk)", "internaldrive") { model.setupListDisks() }
+                        panelAction("Datenträger 0 vorbereiten …", "externaldrive.badge.plus", destructive: true, closes: false) { confirmDiskPrep = true }
+                        panelAction("Lokales Konto (ohne MS-Konto)", "person.crop.circle.badge.checkmark") { model.setupLocalAccount() }
+                    }
+                }
+
+                panelSection("Anzeige") {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
+                        panelAction("Zoom zurücksetzen", "arrow.up.left.and.down.right.magnifyingglass") { handle.resetZoom(); zoom = 1 }
+                        panelAction(model.showStats ? "Leistung ausblenden" : "Leistung anzeigen", "speedometer") { model.showStats.toggle() }
+                        if display.externalConnected {
+                            panelAction(display.preferExternal ? "Auf iPhone anzeigen" : "Auf Monitor anzeigen", "tv") { display.preferExternal.toggle() }
+                        }
+                        panelAction("Leiste ausblenden", "eye.slash") { controlsVisible = false }
+                    }
                 }
             }
+            .padding(16)
         }
-        Section("Windows-Installation") {
-            Button { WinIOSBridge.shared.tapKeyHid(HID.space) } label: { Label("Taste drücken (von ISO booten)", systemImage: "opticaldisc") }
-            Button { model.setupBypassRequirements() } label: { Label("Setup-Helfer: Anforderungen umgehen", systemImage: "wand.and.stars") }
-            Button { model.setupLocalAccount() } label: { Label("Setup-Helfer: Lokales Konto", systemImage: "person.crop.circle.badge.checkmark") }
+        .frame(maxWidth: 720)
+        .frame(maxHeight: 420)
+        .glassCard(cornerRadius: 28)
+    }
+
+    private func panelSection<C: View>(_ title: String, @ViewBuilder content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.footnote.weight(.semibold)).foregroundStyle(.white.opacity(0.65))
+            content()
         }
-        Section {
-            Button { controlsVisible = false } label: { Label("Leiste ausblenden (3 Finger: einblenden)", systemImage: "eye.slash") }
+    }
+
+    /// A key that keeps the panel open (press several keys in a row).
+    private func panelKey(_ title: String, action: @escaping () -> Void) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.6)
+            action()
+        } label: {
+            Text(title)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+    }
+
+    /// An action button; closes the panel afterwards so you can see Windows.
+    private func panelAction(_ title: String, _ icon: String, destructive: Bool = false, closes: Bool = true,
+                             action: @escaping () -> Void) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.6)
+            if closes { showPanel = false }
+            action()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: icon).font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(destructive ? Theme.bad : Theme.accent)
+                    .frame(width: 22)
+                Text(title).font(.subheadline.weight(.medium)).foregroundStyle(.white)
+                    .lineLimit(2).multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func toggleControls() {
         controlsVisible.toggle()
+        if !controlsVisible { showPanel = false }
         if controlsVisible { scheduleAutoHide() }
     }
 
     private func scheduleAutoHide() {
         hideTask?.cancel()
         let task = DispatchWorkItem {
-            if model.isVMRunning && model.fbWidth > 0 && !keyboardVisible && !display.isPresentingExternally {
+            if model.isVMRunning && model.fbWidth > 0 && !keyboardVisible && !showPanel && !display.isPresentingExternally {
                 controlsVisible = false
             }
         }
@@ -326,18 +419,6 @@ struct SessionView: View {
         .glassCard(cornerRadius: 30)
     }
 
-    private var statsPill: some View {
-        HStack(spacing: 12) {
-            Label("\(model.fbWidth)×\(model.fbHeight)", systemImage: "display")
-            Label("\(model.availableMemoryMB) MB frei", systemImage: "memorychip")
-            Label(Self.formatUptime(model.uptime), systemImage: "clock")
-        }
-        .font(.caption2.monospacedDigit())
-        .padding(.horizontal, 12).padding(.vertical, 6)
-        .glassCapsule(interactive: false)
-        .allowsHitTesting(false)
-    }
-
     static func formatUptime(_ s: Double) -> String {
         let t = Int(s)
         return String(format: "%d:%02d:%02d", t / 3600, (t / 60) % 60, t % 60)
@@ -351,5 +432,26 @@ final class StickyKeysObserver: ObservableObject {
         KeyboardController.shared.onStickyChanged = { [weak self] in
             DispatchQueue.main.async { self?.armed = KeyboardController.shared.stickyModifiers }
         }
+    }
+}
+
+/// Live performance pill with its own 1 s timer, so only this small view re-renders.
+struct StatsPill: View {
+    @State private var now = Date()
+    private let timer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        let b = WinIOSBridge.shared
+        HStack(spacing: 12) {
+            Label("\(b.framebufferWidth)×\(b.framebufferHeight)", systemImage: "display")
+            Label("\(b.availableMemoryMB) MB frei", systemImage: "memorychip")
+            Label(SessionView.formatUptime(b.uptimeSeconds), systemImage: "clock")
+        }
+        .id(now)
+        .font(.caption2.monospacedDigit())
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .glassCapsule(interactive: false)
+        .allowsHitTesting(false)
+        .onReceive(timer) { now = $0 }
     }
 }

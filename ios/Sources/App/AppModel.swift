@@ -21,10 +21,8 @@ final class AppModel: ObservableObject {
     @Published var vmStatusText = "Bereit"
     @Published var fbWidth: UInt32 = 0
     @Published var fbHeight: UInt32 = 0
-    @Published var availableMemoryMB: UInt64 = 0
     @Published var usbKeyboardReady = false
     @Published var usbTabletReady = false
-    @Published var uptime: Double = 0
 
     // UI state
     @Published var showSession = false
@@ -83,21 +81,25 @@ final class AppModel: ObservableObject {
 
     // MARK: Engine sync
 
+    /// Copies engine state into published properties – but only values that actually
+    /// changed, so SwiftUI doesn't re-render (and close open menus/pickers) every tick.
     func sync() {
         let b = WinIOSBridge.shared
-        isJITLive = b.isJITLive
-        isDebuggerAttached = b.isDebuggerAttached
-        isVMRunning = b.isVMRunning
-        isUnpacking = b.isUnpacking
-        unpackProgress = b.unpackProgress
-        jitStatusText = Self.localizedJIT(b.jitStatusText, live: b.isJITLive)
-        vmStatusText = b.vmStatusText
-        fbWidth = b.framebufferWidth
-        fbHeight = b.framebufferHeight
-        availableMemoryMB = b.availableMemoryMB
-        usbKeyboardReady = b.usbKeyboardReady
-        usbTabletReady = b.usbTabletReady
-        uptime = b.uptimeSeconds
+        set(\.isJITLive, b.isJITLive)
+        set(\.isDebuggerAttached, b.isDebuggerAttached)
+        set(\.isVMRunning, b.isVMRunning)
+        set(\.isUnpacking, b.isUnpacking)
+        set(\.unpackProgress, (b.unpackProgress * 100).rounded() / 100)
+        set(\.jitStatusText, Self.localizedJIT(b.jitStatusText, live: b.isJITLive))
+        set(\.vmStatusText, b.vmStatusText)
+        set(\.fbWidth, b.framebufferWidth)
+        set(\.fbHeight, b.framebufferHeight)
+        set(\.usbKeyboardReady, b.usbKeyboardReady)
+        set(\.usbTabletReady, b.usbTabletReady)
+    }
+
+    private func set<T: Equatable>(_ kp: ReferenceWritableKeyPath<AppModel, T>, _ value: T) {
+        if self[keyPath: kp] != value { self[keyPath: kp] = value }
     }
 
     static func localizedJIT(_ raw: String, live: Bool) -> String {
@@ -228,6 +230,25 @@ final class AppModel: ObservableObject {
         ]
         var steps: [KeyboardController.MacroStep] = [.combo([HID.lShift], HID.f(10)), .wait(2.5)]
         for c in cmds { steps += [.text(c), .key(HID.enter), .wait(0.6)] }
+        KeyboardController.shared.run(steps)
+    }
+
+    /// Opens a command prompt (Shift+F10) and lists the disks with diskpart.
+    func setupListDisks() {
+        KeyboardController.shared.run([
+            .combo([HID.lShift], HID.f(10)), .wait(2.5),
+            .text("diskpart"), .key(HID.enter), .wait(4.0),
+            .text("list disk"), .key(HID.enter),
+        ])
+    }
+
+    /// Wipes disk 0 and converts it to GPT so Windows Setup can use it.
+    /// Run inside the diskpart prompt opened by `setupListDisks()`.
+    func setupPrepareDisk0() {
+        var steps: [KeyboardController.MacroStep] = []
+        for c in ["select disk 0", "online disk", "attributes disk clear readonly", "clean", "convert gpt", "list disk", "exit"] {
+            steps += [.text(c), .key(HID.enter), .wait(1.5)]
+        }
         KeyboardController.shared.run(steps)
     }
 
