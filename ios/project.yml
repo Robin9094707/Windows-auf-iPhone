@@ -180,7 +180,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.windowsaufiphone.app.JITHelper
         PRODUCT_NAME: JITHelper
         INFOPLIST_FILE: JITHelper/Info.plist
-        APPLICATION_EXTENSION_API_ONLY: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
         SWIFT_INCLUDE_PATHS: "$(PROJECT_DIR)/Vendor/StikJIT/idevice $(PROJECT_DIR)/Vendor/StikJIT/iokit"
         HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/Vendor/StikJIT/idevice $(PROJECT_DIR)/Vendor/StikJIT/iokit"
         LIBRARY_SEARCH_PATHS: "$(PROJECT_DIR)/Vendor/StikJIT/idevice"
