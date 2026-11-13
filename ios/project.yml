@@ -50,11 +50,14 @@ targets:
         CADisableMinimumFrameDurationOnPhone: true
         ITSAppUsesNonExemptEncryption: false
         NSMicrophoneUsageDescription: "Windows kann das Mikrofon deines iPhones als Audioeingang verwenden."
-        NSLocalNetworkUsageDescription: "Windows nutzt das Netzwerk für Internetzugang und Datei-Freigaben."
+        NSLocalNetworkUsageDescription: "Windows nutzt das Netzwerk für Internetzugang und Datei-Freigaben; der eingebaute JIT-Helfer verbindet sich über LocalDevVPN mit deinem iPhone."
+        NSBonjourServices:
+          - _remotepairing._tcp
         LSApplicationQueriesSchemes:
           - stikjit
           - stikdebug
           - sidestore
+          - localdevvpn
         CFBundleURLTypes:
           - CFBundleURLName: com.windowsaufiphone.app
             CFBundleURLSchemes:
@@ -137,6 +140,9 @@ targets:
           - -lresolv
           - -liconv
     dependencies:
+      - target: JITHelper
+        embed: true
+        codeSign: false
       - sdk: AVFoundation.framework
       - sdk: SafariServices.framework
       - sdk: WebKit.framework
@@ -147,3 +153,38 @@ targets:
       - sdk: ImageIO.framework
       - sdk: UniformTypeIdentifiers.framework
       - sdk: GameController.framework
+
+  # Built-in JIT ("eigener StikDebug"): separate process that attaches the debugger to the
+  # app over LocalDevVPN. StikJIT (MPL-2.0) is fetched by scripts/fetch_stikjit.sh.
+  JITHelper:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.4"
+    sources:
+      - path: JITHelper
+        excludes:
+          - "Info.plist"
+          - "*.entitlements"
+      - path: Vendor/StikJIT/Sources
+      - path: Vendor/StikJIT/Scripts
+        buildPhase: resources
+    dependencies:
+      - sdk: JavaScriptCore.framework
+      - sdk: Network.framework
+      - sdk: Security.framework
+      - sdk: CFNetwork.framework
+      - sdk: SystemConfiguration.framework
+      - sdk: IOKit.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.windowsaufiphone.app.JITHelper
+        PRODUCT_NAME: JITHelper
+        INFOPLIST_FILE: JITHelper/Info.plist
+        APPLICATION_EXTENSION_API_ONLY: NO
+        SWIFT_INCLUDE_PATHS: "$(PROJECT_DIR)/Vendor/StikJIT/idevice $(PROJECT_DIR)/Vendor/StikJIT/iokit"
+        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/Vendor/StikJIT/idevice $(PROJECT_DIR)/Vendor/StikJIT/iokit"
+        LIBRARY_SEARCH_PATHS: "$(PROJECT_DIR)/Vendor/StikJIT/idevice"
+        OTHER_LDFLAGS: "$(inherited) -Wl,-hidden-lidevice_ffi"
+        CLANG_CXX_LIBRARY: "libc++"
+        DEAD_CODE_STRIPPING: YES
+        SKIP_INSTALL: YES

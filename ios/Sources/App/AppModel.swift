@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import Combine
 import Foundation
+import ImageIO
 import SwiftUI
 import UIKit
 
@@ -25,9 +26,13 @@ final class AppModel: ObservableObject {
     @Published var usbTabletReady = false
 
     // UI state
-    @Published var showSession = false
+    @Published var showSession = false {
+        didSet { AuroraClock.shared.set(paused: showSession) }
+    }
     @Published var activeSafariURL: IdentifiableURL?
     @Published var stikDebugMissing = false
+    /// Small, pre-decoded copy of the last Windows screen for the home screen.
+    @Published private(set) var previewImage: UIImage?
 
     // Settings (persisted)
     @AppStorage("vm.cpus") var cpuCount: Int = 4
@@ -49,6 +54,17 @@ final class AppModel: ObservableObject {
     @AppStorage("input.trackpadSpeed") var trackpadSpeed: Double = 1.0
     @AppStorage("ui.landscapeLock") var landscapeLock: Bool = true
     @AppStorage("ui.showStats") var showStats: Bool = false
+    /// "auto" (built-in helper when paired, otherwise StikDebug), "builtin" or "stikdebug".
+    @AppStorage("jit.method") var jitMethodRaw: String = "auto"
+    /// Start the built-in JIT helper by itself when the app opens (needs pairing + LocalDevVPN).
+    @AppStorage("jit.autoBuiltIn") var autoBuiltInJIT: Bool = true
+
+    // Built-in JIT helper state
+    @Published var builtInJITRunning = false
+    @Published var builtInJITStage = ""
+    @Published var builtInJITError: String?
+    @Published var builtInJITLog = ""
+    private var didAutoBuiltInJIT = false
 
     var touchMode: TouchMode {
         get { TouchMode(rawValue: touchModeRaw) ?? .direct }
@@ -68,6 +84,9 @@ final class AppModel: ObservableObject {
     private var pollTimer: Timer?
     private var didAutoLaunch = false
     private var failedDataDrives: Set<URL> = []
+    private var previewDate: Date?
+    private var previewLoading = false
+    private var tickCount = 0
 
     /// The single model instance (set at launch) for sheets that need it.
     static var current: AppModel!
@@ -115,6 +134,7 @@ final class AppModel: ObservableObject {
     }
 
     static func localizedJIT(_ raw: String, live: Bool) -> String {
+        if !live, let m = AppModel.current, m.builtInJITRunning, !m.builtInJITStage.isEmpty { return m.builtInJITStage }
         if live { return "JIT aktiv – " + raw.replacingOccurrences(of: "Live ", with: "") }
         if raw.hasPrefix("Waiting for debugger") { return "JIT nicht aktiv" }
         if raw.hasPrefix("Trap guard") || raw.hasPrefix("Not initialized") { return "JIT nicht aktiv" }
@@ -144,6 +164,8 @@ final class AppModel: ObservableObject {
             activeSafariURL = IdentifiableURL(url: u)
         }
         sync()
+        tickCount &+= 1
+        if tickCount % 6 == 1 { refreshPreview() }
         if autostart && b.isJITLive && !b.isVMRunning && !b.isUnpacking && !didAutoLaunch && store.isReadyToBoot {
             didAutoLaunch = true
             start()
@@ -153,6 +175,48 @@ final class AppModel: ObservableObject {
     func onBecameActive() {
         store.refresh()
         tick()
+        refreshPreview()
+        // Built-in JIT: try once per app launch, silently, when everything is set up.
+        if autoBuiltInJIT && !didAutoBuiltInJIT && useBuiltInJIT && !WinIOSBridge.shared.isJITLive
+            && !WinIOSBridge.shared.isDebuggerAttached {
+            didAutoBuiltInJIT = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.enableJITBuiltIn() }
+        }
+    }
+
+    /// Loads the last screenshot as a downsampled thumbnail in the background – only when
+    /// the file changed. Decoding the full-size PNG on the main thread on every redraw
+    /// made the home screen stutter.
+    func refreshPreview() {
+        let url = store.documents.appendingPathComponent("latest_screen.png")
+        let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        guard date != previewDate, !previewLoading else { return }
+        guard date != nil else {
+            previewDate = nil
+            if previewImage != nil { previewImage = nil }
+            return
+        }
+        previewLoading = true
+        DispatchQueue.global(qos: .utility).async {
+            let img = Self.thumbnail(url, maxPixel: 1280)
+            Task { @MainActor in
+                self.previewLoading = false
+                self.previewDate = date
+                if let img { self.previewImage = img }
+            }
+        }
+    }
+
+    nonisolated static func thumbnail(_ url: URL, maxPixel: Int) -> UIImage? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        return UIImage(cgImage: cg)
     }
 
     // MARK: Start / stop
@@ -280,7 +344,97 @@ final class AppModel: ObservableObject {
         sync()
     }
 
-    // MARK: JIT via StikDebug
+    // MARK: JIT
+
+    var builtInJITAvailable: Bool {
+        if #available(iOS 17.4, *) { return WinIOSJITHelper.isAvailable }
+        return false
+    }
+
+    var isPaired: Bool { JITPairing.isPaired }
+
+    /// Whether the JIT button uses the app's own helper instead of the StikDebug app.
+    var useBuiltInJIT: Bool {
+        switch jitMethodRaw {
+        case "stikdebug": return false
+        case "builtin": return builtInJITAvailable
+        default: return builtInJITAvailable && isPaired
+        }
+    }
+
+    /// Main JIT action (home screen button).
+    func enableJIT() {
+        if useBuiltInJIT {
+            if isPaired { enableJITBuiltIn() } else { builtInJITError = "Noch keine Pairing-Datei gekoppelt (Einstellungen → JIT)." }
+        } else {
+            enableJITWithStikDebug()
+        }
+    }
+
+    var jitScriptBase64: String? {
+        guard let url = Bundle.main.url(forResource: "henge-jit", withExtension: "js"),
+              let data = try? Data(contentsOf: url) else { return nil }
+        return data.base64EncodedString()
+    }
+
+    /// Built-in "StikDebug": the JIT helper extension attaches the debugger over LocalDevVPN.
+    func enableJITBuiltIn() {
+        guard !builtInJITRunning, !WinIOSBridge.shared.isJITLive else { return }
+        guard let pairing = JITPairing.data else {
+            builtInJITError = "Noch keine Pairing-Datei gekoppelt (Einstellungen → JIT)."
+            return
+        }
+        builtInJITRunning = true
+        builtInJITError = nil
+        builtInJITLog = ""
+        builtInJITStage = "JIT-Helfer startet …"
+        sync()
+        WinIOSJITHelper.enableJIT(withPairing: pairing, scriptBase64: jitScriptBase64, progress: { [weak self] stage, fraction in
+            guard let self else { return }
+            let pct = Int((fraction * 100).rounded())
+            let text: String
+            switch stage {
+            case 1: text = "Verbinde über LocalDevVPN …"
+            case 2: text = "Prüfe Developer Disk Image …"
+            case 3: text = "Lade Developer Disk Image (einmalig) … \(pct) %"
+            case 4: text = "Binde Developer Disk Image ein … \(pct) %"
+            case 5: text = "Prüfe Developer Disk Image …"
+            case 6: text = "Starte Debugger …"
+            case 7: text = "Debugger verbunden – JIT wird eingerichtet …"
+            default: return
+            }
+            if self.builtInJITStage != text { self.builtInJITStage = text; self.sync() }
+            // The helper attached → claim the JIT region right away (answers its breakpoints).
+            self.tick()
+        }, completion: { [weak self] ok, message, log in
+            guard let self else { return }
+            self.builtInJITRunning = false
+            self.builtInJITLog = log
+            self.builtInJITStage = ""
+            self.tick()
+            if ok || WinIOSBridge.shared.isJITLive {
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } else {
+                self.builtInJITError = Self.friendlyJITError(message)
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            }
+            self.sync()
+        })
+    }
+
+    static func friendlyJITError(_ raw: String) -> String {
+        let m = raw.lowercased()
+        if m.contains("not ready") && (m.contains("timed out") || m.contains("connect") || m.contains("refused") || m.contains("network")) {
+            return "iPhone nicht erreichbar. Öffne LocalDevVPN und tippe auf „Verbinden“. Ohne WLAN: mobile Daten an, VPN verbinden, dann Flugmodus an und zurück in diese App."
+        }
+        if m.contains("pairing") {
+            return "Die Pairing-Datei passt nicht (\(raw)). Erzeuge sie neu (z. B. mit idevice_pair) und kopple sie erneut."
+        }
+        if m.contains("download") {
+            return "Developer Disk Image konnte nicht geladen werden – beim ersten Mal ist Internet nötig. (\(raw))"
+        }
+        return raw
+    }
 
     func enableJITWithStikDebug() {
         guard let bundleID = Bundle.main.bundleIdentifier else { return }

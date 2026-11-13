@@ -26,7 +26,9 @@ struct WindowsOnIPhoneApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
                     case .active: model.onBecameActive()
-                    case .background: WinIOSBridge.shared.flushDisks()
+                    case .background:
+                        WinIOSBridge.shared.flushDisks()
+                        DispatchQueue.global(qos: .utility).async { WinIOSBridge.shared.saveScreenshot() }
                     default: break
                     }
                 }

@@ -198,3 +198,11 @@ The following proprietary operating system and application packages are **never*
 
 - **Microsoft Windows 11 24H2 ARM64** (`Build 26100`) — Property of Microsoft Corporation, governed by the Microsoft Software License Terms. Users supply their own official Microsoft retail ARM64 ESD/ISO (`work/downloads/Win11_24H2_ARM64_en-us.esd`).
 - **Google Antigravity (`2.31.0` Windows ARM64)** — Property of Google LLC, governed by its respective terms of service.
+
+## StikJIT (built-in JIT helper)
+
+- Source: https://github.com/StikDebug/StikJIT (release 2.0.1, commit b3e01a3)
+- License: Mozilla Public License 2.0 (MPL-2.0); includes the prebuilt idevice FFI library
+  (https://github.com/jkcoxson/idevice).
+- Used unmodified in the `JITHelper` app extension; the sources are fetched at build time by
+  `scripts/fetch_stikjit.sh` and are available from the URL above.

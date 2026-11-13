@@ -29,6 +29,11 @@ Der Nutzer spricht Deutsch, hat keinen Mac und sideloadet die IPA (SideStore) + 
   `UnattendBuilder` (Rufus-artige Optionen + Optimierer-Skript), `WindowsTools` (Zwischenablage-Skripte im Shared-Ordner).
 - `ios/Sources/Display` – Metal-Canvas (Touch, Zoom, Langdruck-Menü), externe Displays, `DisplayResolution`.
 - `ios/Sources/Input` – Zeiger, Tastatur (DE/US-Layout, Sticky-Keys, Makros), Gamepad, Zwischenablage.
+- `ios/JITHelper` – App-Extension (eigener Prozess) = eingebauter „StikDebug“: StikJIT (MPL-2.0, Release 2.0.1,
+  per `scripts/fetch_stikjit.sh` nach `ios/Vendor/StikJIT` geholt, nicht eingecheckt) hängt den Debugger über
+  LocalDevVPN (10.7.0.1) an die App und führt `henge-jit.js` aus. Gestartet über private `NSExtension`-API
+  (`Native/winios_jithelper.m`, wie LiveContainer), Fortschritt per Darwin-Notify-State, Ergebnis per completeRequest.
+  Pairing-Datei: `Application Support/JIT/pairingFile.plist` (`Machine/JITPairing.swift`).
 - `ios/Sources/UI` – Glas-Oberfläche; `Glass.swift` kapselt iOS-26-Liquid-Glass mit `#if compiler(>=6.2)`-Fallback.
 
 ## Wichtige Erkenntnisse / Fallen
@@ -40,7 +45,11 @@ Der Nutzer spricht Deutsch, hat keinen Mac und sideloadet die IPA (SideStore) + 
 - EDK2-Quellen haben CRLF-Zeilenenden (Patch-Skript erhält sie).
 - Neue Engine-C-Dateien in `Makefile` (`IOS_C_SRC`) eintragen, Header in `WindowsiOS-Bridging-Header.h`.
 
+- Startbildschirm-Vorschau: Bild nie mit `scaledToFill` direkt im Layout (sprengte die Breite → „rangezoomt“);
+  Thumbnail wird in `AppModel.refreshPreview` per ImageIO im Hintergrund geladen. Aurora-Animation pausiert während Windows läuft.
+
 ## Offene Punkte / Ideen
+- Eingebauter JIT-Helfer auf echter Hardware unbestätigt (Extension-Start via NSExtension, TXM-Skript, ohne WLAN).
 - Auf echter Hardware unbestätigt: Auflösungs-Firmware unter Windows, 8-GB-RAM, 6 vCPUs, Zwischenablage-Sync,
   automatische Übernahme der `autounattend.xml` (beim ersten Versuch kam trotzdem die Netzwerk-Seite).
 - Netzwerktreiber (NetKVM) braucht ein exFAT-Laufwerk der virtio-win-ISO (Dateien → ISO → „Für Windows lesbar machen“).

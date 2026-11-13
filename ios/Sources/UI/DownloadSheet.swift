@@ -207,7 +207,7 @@ struct InstallSheet: View {
             model.mountedISO = selectedISO
             dismiss()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                if model.isJITLive { model.start() } else { model.enableJITWithStikDebug() }
+                if model.isJITLive { model.start() } else { model.enableJIT() }
             }
         } catch {
             self.error = "Festplatte konnte nicht angelegt werden: \(error.localizedDescription)"

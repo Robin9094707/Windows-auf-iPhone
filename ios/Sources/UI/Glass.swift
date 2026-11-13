@@ -120,14 +120,24 @@ struct GlassGroup<Content: View>: View {
 }
 
 /// Animated aurora background in Windows blue tones – the canvas behind all glass.
+/// Pauses the aurora animation while Windows is on screen – it would otherwise keep
+/// re-rendering (and re-blurring all glass) behind the session and steal GPU time.
+final class AuroraClock: ObservableObject {
+    static let shared = AuroraClock()
+    @Published var paused = false
+    func set(paused p: Bool) { if paused != p { paused = p } }
+}
+
 struct AuroraBackground: View {
     @State private var animate = false
+    @ObservedObject private var clock = AuroraClock.shared
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack {
             Color(red: 0.02, green: 0.04, blue: 0.10)
             if #available(iOS 18.0, *) {
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
+                TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: clock.paused || scenePhase != .active)) { ctx in
                     MeshGradient(width: 3, height: 3,
                                  points: Self.meshPoints(ctx.date.timeIntervalSinceReferenceDate),
                                  colors: Self.meshColors)

@@ -7,6 +7,9 @@ struct SettingsView: View {
     @EnvironmentObject var store: MachineStore
     @EnvironmentObject var display: DisplayRouter
     @Environment(\.dismiss) private var dismiss
+    @State private var showPairingPicker = false
+    @State private var pairingMessage: String?
+    @State private var showJITLog = false
 
     private let profile = DeviceProfile.current
 
@@ -115,22 +118,67 @@ struct SettingsView: View {
                         set: { WinIOSBridge.shared.useSafariForGuestLinks = $0; model.objectWillChange.send() }))
                 }
 
-                Section("JIT") {
+                Section {
                     LabeledContent("Status", value: model.jitStatusText)
-                    Button("StikDebug-Skript in „Dateien“ exportieren") {
-                        if store.exportJITScript() != nil { store.lastMessage = "Skript gespeichert: StikDebug-JIT-Skript.js" }
+                    if model.builtInJITAvailable {
+                        Picker("JIT aktivieren mit", selection: $model.jitMethodRaw) {
+                            Text("Automatisch").tag("auto")
+                            Text("Integriert (eigener Helfer)").tag("builtin")
+                            Text("StikDebug-App").tag("stikdebug")
+                        }
+                        HStack {
+                            Label(model.isPaired ? "Pairing-Datei gekoppelt" : "Keine Pairing-Datei",
+                                  systemImage: model.isPaired ? "checkmark.seal.fill" : "link.badge.plus")
+                                .foregroundStyle(model.isPaired ? Theme.good : Theme.warn)
+                            Spacer()
+                            if let d = JITPairing.pairedDate, model.isPaired {
+                                Text(d.formatted(date: .abbreviated, time: .omitted)).foregroundStyle(.secondary)
+                            }
+                        }
+                        Button(model.isPaired ? "Pairing-Datei ersetzen …" : "Pairing-Datei koppeln …") { showPairingPicker = true }
+                        if model.isPaired {
+                            Button("JIT jetzt aktivieren (integriert)") { model.enableJITBuiltIn() }
+                                .disabled(model.isJITLive || model.builtInJITRunning)
+                            Toggle("Beim Öffnen der App automatisch aktivieren", isOn: $model.autoBuiltInJIT)
+                            Button("Pairing-Datei entfernen", role: .destructive) {
+                                JITPairing.remove(); model.objectWillChange.send()
+                            }
+                        }
+                        if let m = pairingMessage { Text(m).font(.footnote).foregroundStyle(.secondary) }
+                        if let e = model.builtInJITError { Text(e).font(.footnote).foregroundStyle(Theme.warn) }
+                        if !model.builtInJITLog.isEmpty {
+                            DisclosureGroup("Protokoll des JIT-Helfers", isExpanded: $showJITLog) {
+                                Text(model.builtInJITLog).font(.caption2.monospaced()).textSelection(.enabled)
+                            }
+                        }
                     }
+                    Button("StikDebug-Skript in „Dateien“ exportieren") {
+                        if store.exportJITScript() != nil { pairingMessage = "Skript gespeichert: StikDebug-JIT-Skript.js" }
+                    }
+                } header: {
+                    Text("JIT")
+                } footer: {
+                    Text("Integriert: Die App bringt ihren eigenen „StikDebug“ mit (StikJIT, MPL-2.0). Einmalig dieselbe Pairing-Datei wie für StikDebug koppeln, dann reicht LocalDevVPN – die StikDebug-App wird nicht mehr gebraucht. Beim ersten Mal lädt der Helfer das Developer Disk Image (Internet nötig), danach bleibt es bis zum Neustart des iPhones eingebunden.\n\nOhne WLAN: mobile Daten an → LocalDevVPN verbinden → Flugmodus an → zurück in die App → JIT aktivieren. Danach kannst du den Flugmodus wieder ausschalten; Windows läuft weiter.")
                 }
 
                 Section("Info") {
                     LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
                     LabeledContent("Engine", value: "WindowsiOS · GPL-2.0-or-later")
                     Link("Quellcode der Engine", destination: URL(string: "https://github.com/ammaarreshi/WindowsiOS")!)
-                    Link("StikDebug", destination: URL(string: "https://github.com/StephenDev0/StikDebug")!)
+                    Link("StikDebug", destination: URL(string: "https://github.com/StikDebug/StikDebug")!)
+                    Link("StikJIT (eingebauter JIT-Helfer, MPL-2.0)", destination: URL(string: "https://github.com/StikDebug/StikJIT")!)
                 }
             }
             .scrollContentBackground(.hidden)
             .background(AuroraBackground())
+            .background(DocumentPicker(isPresented: $showPairingPicker) { urls in
+                guard let url = urls.first else { return }
+                if let err = JITPairing.importFile(url) { pairingMessage = err } else {
+                    pairingMessage = "Gekoppelt: \(url.lastPathComponent)"
+                    model.builtInJITError = nil
+                    model.objectWillChange.send()
+                }
+            })
             .navigationTitle("Einstellungen")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fertig") { dismiss() } } }
@@ -149,16 +197,39 @@ struct JITGuideView: View {
                 AuroraBackground()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        guideStep(1, "StikDebug installieren", "Lade StikDebug (über SideStore, AltStore oder TestFlight) und richte die Pairing-Datei einmalig ein – siehe Anleitung auf der StikDebug-Seite.")
-                        guideStep(2, "Diese App sideloaden", "Installiere die IPA mit SideStore, AltStore, Sideloadly oder einem Entwicklerzertifikat. Wichtig: Signiert mit Entwickler-Profil, damit „get-task-allow“ erhalten bleibt.")
-                        guideStep(3, "JIT aktivieren", "Tippe auf „Mit StikDebug aktivieren“. StikDebug startet die App mit Debugger und dem passenden JIT-Skript (iOS 26 TXM). Die App erkennt das automatisch.")
-                        guideStep(4, "Fertig", "Sobald JIT aktiv ist, reserviert die App 384 MB JIT-Speicher und bis zu 4,5 GB RAM für Windows – dann startet Windows automatisch.")
+                        Text("Variante A – integriert (empfohlen)").font(.title3.weight(.semibold))
+                        guideStep(1, "LocalDevVPN installieren", "Die kostenlose App „LocalDevVPN“ (App Store) leitet die Verbindung zurück auf dein iPhone. Einmal öffnen und „Verbinden“ tippen.")
+                        guideStep(2, "Pairing-Datei koppeln", "Nimm dieselbe Pairing-Datei wie für StikDebug (z. B. aus idevice_pair / iloader am PC, oder aus dem StikDebug-Ordner in „Dateien“). Einstellungen → JIT → „Pairing-Datei koppeln“ – oder die Datei einfach mit dieser App teilen.")
+                        guideStep(3, "JIT aktivieren", "Auf „JIT aktivieren“ tippen. Der eingebaute Helfer verbindet sich, bindet beim ersten Mal das Developer Disk Image ein (Internet nötig) und aktiviert JIT – die StikDebug-App wird nicht mehr gebraucht. Optional passiert das automatisch beim Öffnen der App.")
 
-                        Button { model.enableJITWithStikDebug() } label: {
-                            Label("Mit StikDebug aktivieren", systemImage: "bolt.fill").frame(maxWidth: .infinity).padding(.vertical, 4)
+                        Text("Unterwegs ohne WLAN").font(.title3.weight(.semibold)).padding(.top, 6)
+                        guideStep(1, "Mobile Daten an, LocalDevVPN verbinden", "WLAN darf aus sein. In LocalDevVPN „Verbinden“ tippen.")
+                        guideStep(2, "Flugmodus an", "Im Kontrollzentrum den Flugmodus einschalten (die VPN-Verbindung bleibt). Dann zurück in diese App und JIT aktivieren.")
+                        guideStep(3, "Flugmodus wieder aus", "Sobald „JIT aktiv“ angezeigt wird, kannst du den Flugmodus ausschalten – JIT bleibt bis zum Beenden der App aktiv. Klappt es nicht: LocalDevVPN an lassen, nur „Mobile Daten“ aus und erneut versuchen. Hinweis: Auf manchen iOS-Versionen (z. B. 26.4+) hat Apple diesen Trick eingeschränkt – dann ist kurz ein WLAN nötig (ein beliebiges, auch ohne Internet, z. B. ein Hotspot).")
+
+                        Text("Variante B – StikDebug-App").font(.title3.weight(.semibold)).padding(.top, 6)
+                        guideStep(1, "StikDebug installieren", "StikDebug über SideStore/AltStore laden und die Pairing-Datei dort einrichten.")
+                        guideStep(2, "JIT aktivieren", "Auf „StikDebug“ tippen. StikDebug startet die App mit Debugger und dem passenden JIT-Skript (iOS 26 TXM). Die App erkennt das automatisch.")
+
+                        if model.builtInJITAvailable && model.isPaired {
+                            Button { model.enableJITBuiltIn() } label: {
+                                Label("JIT jetzt aktivieren (integriert)", systemImage: "bolt.fill").frame(maxWidth: .infinity).padding(.vertical, 4)
+                            }
+                            .glassProminentButton()
+                            .controlSize(.large)
+                            .disabled(model.isJITLive || model.builtInJITRunning)
                         }
-                        .glassProminentButton()
+                        Button { model.enableJITWithStikDebug() } label: {
+                            Label("Mit StikDebug aktivieren", systemImage: "bolt.badge.automatic.fill").frame(maxWidth: .infinity).padding(.vertical, 4)
+                        }
+                        .glassButton()
                         .controlSize(.large)
+                        Button {
+                            if let u = URL(string: "localdevvpn://") { UIApplication.shared.open(u) }
+                        } label: {
+                            Label("LocalDevVPN öffnen", systemImage: "network.badge.shield.half.filled").frame(maxWidth: .infinity)
+                        }
+                        .glassButton()
 
                         Button {
                             store.exportJITScript()
@@ -168,7 +239,7 @@ struct JITGuideView: View {
                         }
                         .glassButton()
 
-                        Link(destination: URL(string: "https://github.com/StephenDev0/StikDebug")!) {
+                        Link(destination: URL(string: "https://github.com/StikDebug/StikDebug")!) {
                             Label("StikDebug auf GitHub", systemImage: "safari").frame(maxWidth: .infinity)
                         }
                         .glassButton()

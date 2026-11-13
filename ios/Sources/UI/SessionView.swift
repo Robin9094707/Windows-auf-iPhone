@@ -90,6 +90,11 @@ struct SessionView: View {
         .onDisappear {
             OrientationLock.set(.all)
             keyboardVisible = false
+            // Fresh preview for the home screen.
+            DispatchQueue.global(qos: .utility).async {
+                WinIOSBridge.shared.saveScreenshot()
+                DispatchQueue.main.async { model.refreshPreview() }
+            }
         }
         .confirmationDialog("Windows beenden?", isPresented: $confirmStop, titleVisibility: .visible) {
             Button("Herunterfahren (wie Ein/Aus-Taste)") { model.shutdownGracefully() }

@@ -699,6 +699,16 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
     hv_winvm_flush_disks();
 }
 
+- (void)saveScreenshot {
+    if (!_vmRunning) return;
+    NSString *docs = [self documentsPath];
+    NSString *tmpPng = [docs stringByAppendingPathComponent:@"latest_screen.png.tmp"];
+    NSString *dstPng = [docs stringByAppendingPathComponent:@"latest_screen.png"];
+    if (hv_winvm_save_png(tmpPng.fileSystemRepresentation) == 0) {
+        rename(tmpPng.fileSystemRepresentation, dstPng.fileSystemRepresentation);
+    }
+}
+
 - (void)stopVM {
     if (!_vmRunning) return;
     hv_winvm_stop();

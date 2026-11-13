@@ -82,6 +82,9 @@ jobs:
         if: steps.deps-cache.outputs.cache-hit != 'true'
         run: ./scripts/build_ios_deps.sh
 
+      - name: Fetch StikJIT (built-in JIT helper)
+        run: ./scripts/fetch_stikjit.sh
+
       - name: Build engine static library (libwinvm.a)
         run: |
           make -j"$(sysctl -n hw.ncpu)" ios-lib
@@ -121,12 +124,15 @@ jobs:
             tail -n 40 build/xcodebuild.log
             exit 1
           fi
-          ls -lh "$APP/WindowsOnIPhone" "$APP"/*.fd "$APP"/henge-jit.js
+          ls -lh "$APP/WindowsOnIPhone" "$APP"/*.fd "$APP"/henge-jit.js "$APP"/PlugIns/JITHelper.appex/JITHelper
 
       - name: Package IPA (ad-hoc signed with get-task-allow for StikDebug)
         run: |
           rm -rf Payload && mkdir Payload
           cp -R build/DerivedData/Build/Products/Release-iphoneos/WindowsOnIPhone.app Payload/
+          for EXT in Payload/WindowsOnIPhone.app/PlugIns/*.appex; do
+            codesign --force --sign - --timestamp=none --entitlements ios/JITHelper/JITHelper.entitlements "$EXT"
+          done
           codesign --force --sign - --timestamp=none \
             --entitlements ios/WindowsOnIPhone.entitlements \
             Payload/WindowsOnIPhone.app

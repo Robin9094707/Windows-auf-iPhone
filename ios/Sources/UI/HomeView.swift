@@ -40,6 +40,22 @@ struct HomeView: View {
             .scrollIndicators(.hidden)
             .refreshable { store.refresh(); model.sync() }
         }
+        .overlay(alignment: .bottom) {
+            if let msg = store.lastMessage {
+                Text(msg)
+                    .font(.footnote.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .glassCapsule(interactive: false)
+                    .padding(.horizontal, 24).padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .task(id: msg) {
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        if store.lastMessage == msg { withAnimation { store.lastMessage = nil } }
+                    }
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: store.lastMessage)
         .sheet(item: $sheet) { which in
             Group {
                 switch which {
@@ -87,28 +103,39 @@ struct HomeView: View {
 
     private var heroCard: some View {
         VStack(spacing: 16) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(LinearGradient(colors: [Color(red: 0.0, green: 0.36, blue: 0.85), Color(red: 0.0, green: 0.12, blue: 0.40)],
-                                         startPoint: .topLeading, endPoint: .bottomTrailing))
-                if let img = lastScreenshot {
-                    Image(uiImage: img).resizable().scaledToFill()
-                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                        .opacity(model.isVMRunning ? 1 : 0.55)
-                } else {
-                    WindowsGlyph().frame(width: 74, height: 74).opacity(0.9)
-                }
-                if model.isUnpacking {
-                    VStack(spacing: 10) {
-                        ProgressView(value: model.unpackProgress).tint(.white).frame(width: 200)
-                        Text("Windows wird vorbereitet … \(Int(model.unpackProgress * 100)) %")
-                            .font(.footnote.weight(.semibold))
+            // A fixed 16:9 box whose content can never grow the layout: the preview
+            // image lives in an overlay and is clipped (scaledToFill used to widen the
+            // whole home screen – the "zoomed in" look after returning from Windows).
+            Color.clear
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .overlay {
+                    ZStack {
+                        LinearGradient(colors: [Color(red: 0.0, green: 0.36, blue: 0.85), Color(red: 0.0, green: 0.12, blue: 0.40)],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing)
+                        if let img = model.previewImage {
+                            Image(uiImage: img)
+                                .resizable()
+                                .interpolation(.medium)
+                                .scaledToFill()
+                                .opacity(model.isVMRunning ? 1 : 0.55)
+                        } else {
+                            WindowsGlyph().frame(width: 74, height: 74).opacity(0.9)
+                        }
                     }
-                    .padding(14)
-                    .glassCard(cornerRadius: 18)
                 }
-            }
-            .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay {
+                    if model.isUnpacking {
+                        VStack(spacing: 10) {
+                            ProgressView(value: model.unpackProgress).tint(.white).frame(width: 200)
+                            Text("Windows wird vorbereitet … \(Int(model.unpackProgress * 100)) %")
+                                .font(.footnote.weight(.semibold))
+                        }
+                        .padding(14)
+                        .glassCard(cornerRadius: 18)
+                    }
+                }
             .overlay(alignment: .topLeading) {
                 HStack(spacing: 6) {
                     StatusDot(color: model.isVMRunning ? Theme.good : (model.isJITLive ? Theme.accent : Theme.warn))
@@ -143,20 +170,21 @@ struct HomeView: View {
             }
             .glassProminentButton()
             .controlSize(.large)
-            .disabled(model.isUnpacking || store.isConverting)
+            .disabled(model.isUnpacking || store.isConverting || model.builtInJITRunning)
         }
         .padding(16)
         .glassCard(cornerRadius: 32)
     }
 
-    private var lastScreenshot: UIImage? {
-        let url = store.documents.appendingPathComponent("latest_screen.png")
-        return UIImage(contentsOfFile: url.path)
-    }
-
     private var primaryStatus: String {
         if model.isVMRunning { return model.vmStatusText }
-        if !model.isJITLive { return "Schritt 1: Aktiviere JIT mit StikDebug – danach startet Windows mit voller Geschwindigkeit." }
+        if !model.isJITLive {
+            if model.builtInJITRunning { return model.builtInJITStage }
+            if let e = model.builtInJITError { return e }
+            return model.useBuiltInJIT
+                ? "Schritt 1: Aktiviere JIT – direkt in der App über LocalDevVPN, ganz ohne StikDebug."
+                : "Schritt 1: Aktiviere JIT mit StikDebug – danach startet Windows mit voller Geschwindigkeit."
+        }
         if !store.hasWindows {
             return store.isos.isEmpty
                 ? "Schritt 2: Lade Windows 11 ARM64 herunter oder importiere ein Image."
@@ -167,7 +195,10 @@ struct HomeView: View {
 
     private var primaryTitle: String {
         if model.isVMRunning { return "Zu Windows wechseln" }
-        if !model.isJITLive { return "JIT mit StikDebug aktivieren" }
+        if !model.isJITLive {
+            if model.builtInJITRunning { return "JIT wird aktiviert …" }
+            return model.useBuiltInJIT ? "JIT aktivieren" : "JIT mit StikDebug aktivieren"
+        }
         if !store.hasWindows { return store.isos.isEmpty ? "Windows herunterladen" : "Installation vorbereiten" }
         return "Windows starten"
     }
@@ -181,7 +212,7 @@ struct HomeView: View {
 
     private func primaryAction() {
         if model.isVMRunning { model.showSession = true; return }
-        if !model.isJITLive { model.enableJITWithStikDebug(); return }
+        if !model.isJITLive { model.enableJIT(); return }
         if !store.hasWindows { sheet = store.isos.isEmpty ? .download : .install; return }
         model.start()
     }
@@ -194,14 +225,39 @@ struct HomeView: View {
                  subtitle: model.jitStatusText,
                  done: model.isJITLive,
                  icon: "bolt.fill") {
-            HStack(spacing: 10) {
-                Button { model.enableJITWithStikDebug() } label: {
-                    Label("StikDebug", systemImage: "bolt.badge.automatic.fill").frame(maxWidth: .infinity)
+            VStack(alignment: .leading, spacing: 10) {
+                if model.builtInJITAvailable {
+                    HStack(spacing: 10) {
+                        Button { model.enableJITBuiltIn() } label: {
+                            Label(model.builtInJITRunning ? "Läuft …" : "Integriert", systemImage: "bolt.fill").frame(maxWidth: .infinity)
+                        }
+                        .glassProminentButton()
+                        .disabled(model.isJITLive || model.builtInJITRunning || !model.isPaired)
+                        Button { model.enableJITWithStikDebug() } label: {
+                            Label("StikDebug", systemImage: "bolt.badge.automatic.fill").frame(maxWidth: .infinity)
+                        }
+                        .glassButton()
+                        .disabled(model.isJITLive)
+                    }
+                    if !model.isPaired {
+                        Button { sheet = .settings } label: {
+                            Label("Pairing-Datei koppeln (Einstellungen → JIT)", systemImage: "link.badge.plus").frame(maxWidth: .infinity)
+                        }
+                        .glassButton()
+                    }
+                } else {
+                    Button { model.enableJITWithStikDebug() } label: {
+                        Label("StikDebug", systemImage: "bolt.badge.automatic.fill").frame(maxWidth: .infinity)
+                    }
+                    .glassProminentButton()
+                    .disabled(model.isJITLive)
                 }
-                .glassProminentButton()
-                .disabled(model.isJITLive)
+                if let err = model.builtInJITError, !model.isJITLive {
+                    Text(err).font(.caption).foregroundStyle(Theme.warn)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Button { sheet = .jitGuide } label: {
-                    Label("Anleitung", systemImage: "questionmark.circle").frame(maxWidth: .infinity)
+                    Label("Anleitung (auch ohne WLAN)", systemImage: "questionmark.circle").frame(maxWidth: .infinity)
                 }
                 .glassButton()
             }

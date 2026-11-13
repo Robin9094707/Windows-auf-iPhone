@@ -83,6 +83,8 @@ typedef void (^WinIOSStateCallback)(void);
 - (void)sendEscape;
 - (void)pressPowerButton;
 - (void)flushDisks;
+/* Writes the current Windows screen to Documents/latest_screen.png (home-screen preview). */
+- (void)saveScreenshot;
 - (void)stopVM;
 
 @end

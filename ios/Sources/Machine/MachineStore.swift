@@ -323,6 +323,13 @@ final class MachineStore: ObservableObject {
             }
         }
         for url in candidates {
+            if JITPairing.isCandidate(url), let data = try? Data(contentsOf: url), JITPairing.looksLikePairing(data) {
+                if JITPairing.importFile(url) == nil {
+                    try? fm.removeItem(at: url)
+                    lastMessage = "Pairing-Datei gekoppelt."
+                }
+                continue
+            }
             var kind = Self.classify(url)
             if kind != .iso && kind != .sparseImage && Self.isISO9660(url) { kind = .iso }
             guard kind != .other, kind != .unsupported else { continue }
@@ -356,6 +363,14 @@ final class MachineStore: ObservableObject {
     }
 
     func importFile(_ src: URL) {
+        // StikDebug pairing file → couple the built-in JIT helper.
+        if JITPairing.isCandidate(src) {
+            if let err = JITPairing.importFile(src) { lastError = err } else {
+                lastMessage = "Pairing-Datei gekoppelt – JIT lässt sich jetzt direkt in der App aktivieren."
+                AppModel.current?.objectWillChange.send()
+            }
+            return
+        }
         let kind = Self.classify(src)
         if kind == .unsupported {
             lastError = "„\(src.lastPathComponent)“ wird nicht direkt unterstützt. Bitte als .img (raw), .hvsparse oder .iso bereitstellen."
