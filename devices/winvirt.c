@@ -95,6 +95,9 @@ static uint64_t tick_locked(HvMachine *m, HvCpu *cpu) {
     if (cpu->index != 0) return deadline;
     hv_pl031_tick(b->rtc);
     if (b->poll) b->poll();
+    hv_nvme_poll(b->nvme0);
+    hv_nvme_poll(b->nvme1);
+    hv_nvme_poll(b->nvme2);
     hv_xhci_poll(b->usb);
     if (b->hda) hv_hda_poll(b->hda);
     if (b->snd) hv_virtio_snd_poll(b->snd);

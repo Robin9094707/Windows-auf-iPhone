@@ -30,6 +30,19 @@ typedef struct HvNvmeCq {
     int valid;
 } HvNvmeCq;
 
+/* I/O commands run on worker threads (like a real SSD): the CPU that rings the
+   doorbell only queues them; completions are posted by hv_nvme_poll on CPU 0. */
+#define HV_NVME_RING 256
+#define HV_NVME_WORKERS 4
+
+typedef struct HvNvmeReq {
+    uint8_t cmd[64];
+    uint16_t sqid;
+    uint16_t status;
+    int done;    /* set by the worker (atomic) */
+    int posted;  /* CQE written (CPU 0) */
+} HvNvmeReq;
+
 typedef struct HvNvme {
     HvPciDev pci;
     HvMachine *m;
@@ -58,8 +71,21 @@ typedef struct HvNvme {
     uint8_t *io_buf;
     uint32_t io_buf_cap;
     uint64_t rd_bytes, wr_bytes;
+
+    /* Asynchronous I/O */
+    HvNvmeReq ring[HV_NVME_RING];
+    uint32_t submitted, claimed, completed, published; /* ring counters */
+    uint32_t inflight;
+    int fence;            /* a Flush waits for everything before it */
+    uint32_t backlog;     /* bitmask of SQs with commands left (ring was full) */
+    pthread_mutex_t wmu;
+    pthread_cond_t wcv, done_cv;
+    pthread_t worker[HV_NVME_WORKERS];
+    int async;            /* 0: run I/O on the CPU thread (HV_NVME_SYNC) */
 } HvNvme;
 
 HvNvme *hv_nvme_create(HvMachine *m, HvPcie *bus, HvDisk *disk, const char *serial);
+/* CPU 0 (board tick, device lock held): posts finished I/O and raises the interrupts. */
+void hv_nvme_poll(HvNvme *nv);
 
 #endif

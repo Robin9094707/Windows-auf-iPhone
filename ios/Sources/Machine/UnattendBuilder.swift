@@ -50,8 +50,9 @@ enum UnattendBuilder {
     static let optimizerLauncher =
         "cmd /c for %d in (C D E F G H I J K L M N O P) do @if exist %d:\\iPhone-Optimieren.cmd call %d:\\iPhone-Optimieren.cmd"
 
-    /// Tunes Windows for the iPhone's JIT: fewer background services, no animations/transparency,
-    /// max performance power plan, no hibernation file, no BitLocker. Runs elevated.
+    /// Tunes Windows for the iPhone's JIT: fewer background services and scheduled tasks, no memory
+    /// compression, Defender skips its own drives, no animations/transparency, max performance power
+    /// plan, no hibernation file, no BitLocker. Runs elevated; updated on the data drive at every start.
     static let optimizerScript = #"""
     @echo off
     title Windows auf iPhone - Optimierung
@@ -60,10 +61,31 @@ enum UnattendBuilder {
     powercfg /h off >nul 2>&1
     powercfg /change monitor-timeout-ac 0 >nul 2>&1
     powercfg /change standby-timeout-ac 0 >nul 2>&1
-    for %%s in (SysMain WSearch DiagTrack dmwappushservice MapsBroker WerSvc RetailDemo) do (
+    bcdedit /timeout 0 >nul 2>&1
+    echo  - Hintergrunddienste ...
+    for %%s in (SysMain WSearch DiagTrack dmwappushservice MapsBroker WerSvc RetailDemo DPS WdiServiceHost WdiSystemHost PcaSvc TrkWks lfsvc wisvc Fax PhoneSvc SEMgrSvc WpcMonSvc XblAuthManager XblGameSave XboxNetApiSvc XboxGipSvc WMPNetworkSvc diagsvc) do (
       sc stop %%s >nul 2>&1
       sc config %%s start= disabled >nul 2>&1
     )
+    echo  - Speicher: keine Komprimierung (kostet im Emulator viel Rechenzeit) ...
+    powershell -NoProfile -Command "Disable-MMAgent -MemoryCompression -ErrorAction SilentlyContinue; Disable-MMAgent -PageCombining -ErrorAction SilentlyContinue" >nul 2>&1
+    reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v DisablePagingExecutive /t REG_DWORD /d 1 /f >nul
+    echo  - Defender: eigene Laufwerke nicht in Echtzeit scannen, keine geplanten Scans ...
+    powershell -NoProfile -Command "Add-MpPreference -ExclusionPath 'C:\','D:\','E:\','F:\','G:\' -ErrorAction SilentlyContinue; Set-MpPreference -ScanAvgCPULoadFactor 5 -DisableArchiveScanning $true -DisableScanningNetworkFiles $true -DisableCatchupFullScan $true -DisableCatchupQuickScan $true -ScanScheduleDay 8 -RemediationScheduleDay 8 -MAPSReporting 0 -SubmitSamplesConsent 2 -ErrorAction SilentlyContinue; Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue" >nul 2>&1
+    echo  - Dateisystem ...
+    fsutil behavior set disablelastaccess 1 >nul 2>&1
+    fsutil behavior set disable8dot3 1 >nul 2>&1
+    DISM /Online /Set-ReservedStorageState /State:Disabled /NoRestart >nul 2>&1
+    echo  - Geplante Aufgaben ...
+    for %%t in ("\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser" "\Microsoft\Windows\Application Experience\ProgramDataUpdater" "\Microsoft\Windows\Application Experience\StartupAppTask" "\Microsoft\Windows\Customer Experience Improvement Program\Consolidator" "\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip" "\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector" "\Microsoft\Windows\Maintenance\WinSAT" "\Microsoft\Windows\Windows Error Reporting\QueueReporting" "\Microsoft\Windows\Feedback\Siuf\DmClient" "\Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload" "\Microsoft\Windows\Power Efficiency Diagnostics\AnalyzeSystem") do schtasks /Change /TN %%t /Disable >nul 2>&1
+    echo  - Oberflaeche und Autostart ...
+    reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize" /v StartupDelayInMSec /t REG_DWORD /d 0 /f >nul
+    reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v OneDrive /f >nul 2>&1
+    reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v OneDriveSetup /f >nul 2>&1
+    reg add "HKCU\Software\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /t REG_DWORD /d 1 /f >nul
+    reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\SearchSettings" /v IsDynamicSearchBoxEnabled /t REG_DWORD /d 0 /f >nul
+    reg add "HKCU\Control Panel\Desktop" /v DragFullWindows /t REG_SZ /d 0 /f >nul
+    for %%v in (SubscribedContent-310093Enabled SubscribedContent-338388Enabled SubscribedContent-353694Enabled SubscribedContent-353696Enabled SoftLandingEnabled) do reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v %%v /t REG_DWORD /d 0 /f >nul
     reg add "HKCU\Control Panel\Desktop" /v UserPreferencesMask /t REG_BINARY /d 9012038010000000 /f >nul
     reg add "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_SZ /d 0 /f >nul
     reg add "HKCU\Control Panel\Desktop\WindowMetrics" /v MinAnimate /t REG_SZ /d 0 /f >nul

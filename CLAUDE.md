@@ -22,6 +22,10 @@ Der Nutzer spricht Deutsch, hat keinen Mac und sideloadet die IPA (SideStore) + 
     Getestet mit genisoimage/pycdlib-ISOs + `fsck.exfat` + Byte-Vergleich.
   - `devices/acpi.c` – `hv_smbios_set_device` (echte iPhone-Daten für Task-Manager), `hv_fw_set_resolution` (fw_cfg `opt/org.winiphone/resolution`).
   - `devices/winvirt.c` – `hv_winvirt_add_nvme` (3. NVMe = Daten-Laufwerk). `HV_MAX_CPUS` iOS = 6.
+  - `devices/nvme.c` – I/O asynchron: Doorbell legt Befehle in einen Ring, 4 Worker-Threads machen Zero-Copy
+    `preadv/pwritev` direkt in den Gast-RAM (+ `hv_dma_written`), CQEs/Interrupts postet `hv_nvme_poll` auf CPU 0
+    (Board-Tick, Device-Lock). Flush = Zaun. TRIM → `F_PUNCHHOLE` (gibt iPhone-Speicher frei). `HV_NVME_SYNC=1` = alt.
+    Unter Linux testbar mit Stubs (siehe Commit „async NVMe“: Test mit TSan).
   - `devices/fb_metal.m` – Streifen-Vergleich, nur geänderte Bereiche hochladen, 120 Hz, bikubischer Shader (Fallback bilinear).
 - `ios/Sources/Native` – ObjC-Bridge (`winios_bridge.m`), TXM-JIT/RAM-Reservierung (`winios_jit.c`, RAM-Ziel bis 8 GB).
 - `ios/Sources/App` – `AppModel` (Zustand, Start, Makros), `DeviceProfile` (hw.machine → Modell/Chip).
@@ -45,6 +49,8 @@ Der Nutzer spricht Deutsch, hat keinen Mac und sideloadet die IPA (SideStore) + 
 - EDK2-Quellen haben CRLF-Zeilenenden (Patch-Skript erhält sie).
 - Neue Engine-C-Dateien in `Makefile` (`IOS_C_SRC`) eintragen, Header in `WindowsiOS-Bridging-Header.h`.
 
+- Max. Leistung setzt `HV_QOS=ui` und `HV_WFI_SPIN=30` (µs Warten vor dem Schlafen einer leeren vCPU).
+- Session: `isIdleTimerDisabled` (Bildschirmsperre würde die VM einfrieren), Warnung bei Stromsparmodus/Hitze.
 - Startbildschirm-Vorschau: Bild nie mit `scaledToFill` direkt im Layout (sprengte die Breite → „rangezoomt“);
   Thumbnail wird in `AppModel.refreshPreview` per ImageIO im Hintergrund geladen. Aurora-Animation pausiert während Windows läuft.
 

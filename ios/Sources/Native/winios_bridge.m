@@ -437,6 +437,9 @@ static void unpack_progress_cb(uint64_t done, uint64_t total, void *opaque) {
     NSString *codePath = [self resolvedFirmwarePath];
     hv_fw_set_resolution(_guestWidth, _guestHeight);
     if (_maxPerformance) setenv("HV_QOS", "ui", 1); else unsetenv("HV_QOS");
+    /* Max performance: an idle vCPU watches ~30 us for a wake-up (IPIs, I/O completions)
+       before it sleeps – waking a sleeping thread takes far longer than that. */
+    if (_maxPerformance) setenv("HV_WFI_SPIN", "30", 1); else unsetenv("HV_WFI_SPIN");
     NSString *varsPath = [dir stringByAppendingPathComponent:@"vars.fd"];
     NSString *diskPath = [dir stringByAppendingPathComponent:@"windows11.img"];
 

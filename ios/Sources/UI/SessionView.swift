@@ -7,6 +7,7 @@ struct SessionView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var display: DisplayRouter
     @StateObject private var keys = StickyKeysObserver()
+    @StateObject private var power = PowerConditions()
 
     @State private var controlsVisible = true
     @State private var keyboardVisible = false
@@ -50,6 +51,13 @@ struct SessionView: View {
                     actionPanel.transition(.scale(scale: 0.96, anchor: .top).combined(with: .opacity))
                 }
                 if model.showStats && model.isVMRunning { StatsPill() }
+                if let warn = power.warning, controlsVisible, model.isVMRunning {
+                    Label(warn, systemImage: power.lowPower ? "battery.25" : "thermometer.high")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 12).padding(.vertical, 7)
+                        .glassCapsule(tint: Theme.warn, interactive: false)
+                        .transition(.opacity)
+                }
                 Spacer()
                 if keyboardVisible { keyBar.transition(.move(edge: .bottom).combined(with: .opacity)) }
             }
@@ -83,12 +91,15 @@ struct SessionView: View {
             Text("Nur nutzen, wenn „list disk“ zeigt, dass Datenträger 0 deine leere Windows-Festplatte (~64 GB) ist. Alles darauf wird gelöscht.")
         }
         .onAppear {
+            // Never let the screen lock while Windows is in front (iOS would suspend the VM).
+            UIApplication.shared.isIdleTimerDisabled = true
             if model.landscapeLock { OrientationLock.set(.landscape) }
             GamepadInput.shared.start()
             scheduleAutoHide()
         }
         .onDisappear {
             OrientationLock.set(.all)
+            UIApplication.shared.isIdleTimerDisabled = false
             keyboardVisible = false
             // Fresh preview for the home screen.
             DispatchQueue.global(qos: .utility).async {
@@ -500,5 +511,33 @@ struct StatsPill: View {
         .glassCapsule(interactive: false)
         .allowsHitTesting(false)
         .onReceive(timer) { now = $0 }
+    }
+}
+
+/// Low Power Mode caps the CPU clock and a hot iPhone throttles – both slow Windows down a lot.
+final class PowerConditions: ObservableObject {
+    @Published private(set) var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+    @Published private(set) var thermal = ProcessInfo.processInfo.thermalState
+    private var observers: [NSObjectProtocol] = []
+
+    init() {
+        let nc = NotificationCenter.default
+        observers.append(nc.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { [weak self] _ in
+            self?.lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+        })
+        observers.append(nc.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.thermal = ProcessInfo.processInfo.thermalState
+        })
+    }
+
+    deinit { observers.forEach { NotificationCenter.default.removeObserver($0) } }
+
+    var warning: String? {
+        if lowPower { return "Stromsparmodus an – Windows läuft deutlich langsamer" }
+        switch thermal {
+        case .critical: return "iPhone sehr heiß – Leistung stark gedrosselt"
+        case .serious: return "iPhone heiß – Leistung gedrosselt"
+        default: return nil
+        }
     }
 }

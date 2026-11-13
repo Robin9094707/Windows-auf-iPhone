@@ -1,8 +1,12 @@
 #include "nvme.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/uio.h>
+#include <unistd.h>
 
 #define NVME_BAR_SIZE 0x4000
 #define NVME_MAX_XFER (2u << 20) /* 2 MB MDTS */
@@ -32,6 +36,8 @@ typedef struct NvmeCqe {
     uint16_t cid;
     uint16_t status; /* bit 0: phase, bits 15:1: status code */
 } NvmeCqe;
+
+static void quiesce(HvNvme *nv);
 
 static uint32_t page_size_of(const HvNvme *nv) {
     uint32_t mps = (nv->cc >> 7) & 0xf;
@@ -284,7 +290,11 @@ static void process_admin_cmd(HvNvme *nv, HvNvmeSq *sq, const NvmeCmd *cmd) {
     case 0x00: { /* Delete I/O Submission Queue */
         uint16_t qid = (uint16_t)(cmd->cdw10 & 0xffff);
         if (qid == 0 || qid >= HV_NVME_MAX_QUEUES) status = 0x0101; /* Invalid Queue Identifier */
-        else nv->sq[qid] = (HvNvmeSq){0};
+        else {
+            quiesce(nv);
+            nv->backlog &= ~(1u << qid);
+            nv->sq[qid] = (HvNvmeSq){0};
+        }
         break;
     }
     case 0x01: { /* Create I/O Submission Queue */
@@ -305,6 +315,7 @@ static void process_admin_cmd(HvNvme *nv, HvNvmeSq *sq, const NvmeCmd *cmd) {
         uint16_t qid = (uint16_t)(cmd->cdw10 & 0xffff);
         if (qid == 0 || qid >= HV_NVME_MAX_QUEUES) status = 0x0101;
         else {
+            quiesce(nv);
             nv->cq[qid] = (HvNvmeCq){0};
             nvme_update_intx(nv);
         }
@@ -364,94 +375,287 @@ static void process_admin_cmd(HvNvme *nv, HvNvmeSq *sq, const NvmeCmd *cmd) {
     post_cqe(nv, sq, 0, cmd->cid, dw0, status);
 }
 
-static uint8_t *ensure_io_buf(HvNvme *nv, uint32_t bytes) {
-    if (bytes <= nv->io_buf_cap) return nv->io_buf;
-    uint8_t *nb = realloc(nv->io_buf, bytes);
-    if (!nb) return NULL;
-    nv->io_buf = nb;
-    nv->io_buf_cap = bytes;
-    return nb;
+/* ---- I/O commands (thread-safe: run on worker threads) ---- */
+
+#define NVME_MAX_IOV 544 /* 2 MB in 4 KB pages, plus a little */
+
+/* Builds host iovecs for the guest buffer described by PRP1/PRP2 (straight into
+   guest RAM, no bounce buffer); physically adjacent pages are merged.
+   Returns the number of iovecs, or -1 if a page is not RAM. */
+static int prp_iov(HvNvme *nv, uint64_t prp1, uint64_t prp2, uint32_t len, struct iovec *iov,
+                   uint64_t *pa_out, uint32_t *len_out) {
+    uint32_t ps = page_size_of(nv);
+    uint64_t pmask = ~((uint64_t)ps - 1);
+    int n = 0;
+    uint64_t list_pa = 0;
+    uint32_t list_off = 0;
+    int first = 1, use_list = 0;
+    uint64_t pa = prp1;
+    while (len > 0) {
+        uint32_t chunk;
+        if (first) {
+            chunk = ps - (uint32_t)(prp1 & (ps - 1));
+            first = 0;
+        } else {
+            if (!use_list && len <= ps) {
+                pa = prp2 & pmask;
+            } else {
+                if (!use_list) {
+                    use_list = 1;
+                    list_pa = prp2 & pmask;
+                    list_off = (uint32_t)(prp2 & (ps - 1));
+                }
+                if (list_off + 8 == ps && len > ps) {
+                    uint64_t next = 0;
+                    if (hv_phys_read(nv->m, list_pa + list_off, &next, 8) != 0) return -1;
+                    list_pa = next & pmask;
+                    list_off = 0;
+                }
+                uint64_t e = 0;
+                if (hv_phys_read(nv->m, list_pa + list_off, &e, 8) != 0) return -1;
+                list_off += 8;
+                pa = e & pmask;
+            }
+            chunk = ps;
+        }
+        if (chunk > len) chunk = len;
+        uint8_t *p = hv_phys_ptr(nv->m, pa, chunk);
+        if (!p) return -1;
+        if (n > 0 && (uint8_t *)iov[n - 1].iov_base + iov[n - 1].iov_len == p && pa_out[n - 1] + len_out[n - 1] == pa) {
+            iov[n - 1].iov_len += chunk;
+            len_out[n - 1] += chunk;
+        } else {
+            if (n >= NVME_MAX_IOV) return -1;
+            iov[n].iov_base = p;
+            iov[n].iov_len = chunk;
+            pa_out[n] = pa;
+            len_out[n] = chunk;
+            n++;
+        }
+        len -= chunk;
+    }
+    return n;
 }
 
-static void process_io_cmd(HvNvme *nv, HvNvmeSq *sq, uint16_t sqid, const NvmeCmd *cmd) {
-    uint16_t status = 0;
-
-    if (cmd->nsid != 1 && cmd->nsid != 0xffffffffu) {
-        post_cqe(nv, sq, sqid, cmd->cid, 0, 0x000b);
-        return;
+static int disk_rw_iov(HvDisk *d, int write, struct iovec *iov, int n, uint64_t off) {
+    uint64_t at = d->offset + off;
+    int i = 0;
+    while (i < n) {
+        int cnt = n - i > 1024 ? 1024 : n - i;
+        ssize_t r = write ? pwritev(d->fd, iov + i, cnt, (off_t)at) : preadv(d->fd, iov + i, cnt, (off_t)at);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (r == 0) return -1;
+        at += (uint64_t)r;
+        /* Skip what was done (short transfers resume mid-iovec). */
+        while (i < n && (size_t)r >= iov[i].iov_len) {
+            r -= (ssize_t)iov[i].iov_len;
+            i++;
+        }
+        if (i < n && r > 0) {
+            iov[i].iov_base = (uint8_t *)iov[i].iov_base + r;
+            iov[i].iov_len -= (size_t)r;
+        }
     }
+    return 0;
+}
 
+static const uint8_t nvme_zero[64 << 10];
+
+/* Deallocate (TRIM): give whole 4 KB blocks back to the iPhone's flash. Reads of them return 0. */
+static void punch(HvDisk *d, uint64_t off, uint64_t len) {
+#ifdef F_PUNCHHOLE
+    uint64_t start = (d->offset + off + 4095) & ~4095ull;
+    uint64_t end = (d->offset + off + len) & ~4095ull;
+    if (d->readonly || end <= start) return;
+    fpunchhole_t ph = {0};
+    ph.fp_offset = (off_t)start;
+    ph.fp_length = (off_t)(end - start);
+    (void)fcntl(d->fd, F_PUNCHHOLE, &ph);
+#else
+    (void)d; (void)off; (void)len;
+#endif
+}
+
+static uint16_t exec_io(HvNvme *nv, const NvmeCmd *cmd) {
+    if (cmd->nsid != 1 && cmd->nsid != 0xffffffffu) return 0x000b;
     switch (cmd->opc) {
     case 0x00: /* Flush */
-        if (hv_disk_flush(nv->disk) != 0) status = 0x0004;
-        break;
+        return hv_disk_flush(nv->disk) != 0 ? 0x0004 : 0;
     case 0x01:   /* Write */
     case 0x02: { /* Read */
         uint64_t slba = ((uint64_t)cmd->cdw11 << 32) | cmd->cdw10;
         uint32_t nlb = (cmd->cdw12 & 0xffff) + 1u;
         uint64_t off = slba * 512ull;
         uint32_t bytes = nlb * 512u;
-        if (bytes > NVME_MAX_XFER || off + bytes > nv->disk->size) {
-            status = 0x0080; /* LBA Out of Range */
-            break;
-        }
-        uint8_t *buf = ensure_io_buf(nv, bytes);
-        if (!buf) {
-            status = 0x0004;
-            break;
-        }
-        if (cmd->opc == 0x02) {
-            if (hv_disk_read(nv->disk, off, buf, bytes) != 0 ||
-                nvme_dma_prp(nv, cmd->prp1, cmd->prp2, buf, bytes, 1) != 0) {
-                status = 0x0004;
-            } else {
-                nv->rd_bytes += bytes;
-            }
+        if (bytes > NVME_MAX_XFER || off + bytes > nv->disk->size) return 0x0080; /* LBA Out of Range */
+        if (cmd->opc == 0x01 && nv->disk->readonly) return 0x0004;
+        struct iovec iov[NVME_MAX_IOV];
+        uint64_t pas[NVME_MAX_IOV];
+        uint32_t lens[NVME_MAX_IOV];
+        int n = prp_iov(nv, cmd->prp1, cmd->prp2, bytes, iov, pas, lens);
+        if (n < 0) return 0x0004;
+        int write = cmd->opc == 0x01;
+        if (disk_rw_iov(nv->disk, write, iov, n, off) != 0) return 0x0004;
+        if (!write) {
+            for (int i = 0; i < n; i++) hv_dma_written(nv->m, pas[i], lens[i]);
+            __atomic_add_fetch(&nv->rd_bytes, bytes, __ATOMIC_RELAXED);
         } else {
-            if (nvme_dma_prp(nv, cmd->prp1, cmd->prp2, buf, bytes, 0) != 0 ||
-                hv_disk_write(nv->disk, off, buf, bytes) != 0) {
-                status = 0x0004;
-            } else {
-                nv->wr_bytes += bytes;
-            }
+            __atomic_add_fetch(&nv->wr_bytes, bytes, __ATOMIC_RELAXED);
         }
-        break;
+        return 0;
     }
     case 0x08: { /* Write Zeroes */
         uint64_t slba = ((uint64_t)cmd->cdw11 << 32) | cmd->cdw10;
         uint32_t nlb = (cmd->cdw12 & 0xffff) + 1u;
         uint64_t off = slba * 512ull;
-        uint32_t bytes = nlb * 512u;
-        if (off + bytes > nv->disk->size) {
-            status = 0x0080;
-            break;
-        }
-        uint8_t zero[4096] = {0};
+        uint64_t bytes = (uint64_t)nlb * 512u;
+        if (off + bytes > nv->disk->size) return 0x0080;
         while (bytes > 0) {
-            uint32_t chunk = bytes < sizeof(zero) ? bytes : (uint32_t)sizeof(zero);
-            if (hv_disk_write(nv->disk, off, zero, chunk) != 0) {
-                status = 0x0004;
-                break;
-            }
+            uint32_t chunk = bytes < sizeof nvme_zero ? (uint32_t)bytes : (uint32_t)sizeof nvme_zero;
+            if (hv_disk_write(nv->disk, off, nvme_zero, chunk) != 0) return 0x0004;
             off += chunk;
             bytes -= chunk;
         }
-        break;
+        return 0;
     }
-    case 0x09: /* Dataset Management (TRIM / Deallocate) */
-        status = 0;
-        break;
+    case 0x09: { /* Dataset Management */
+        if (cmd->cdw11 & 4) { /* AD: deallocate */
+            uint32_t nr = (cmd->cdw10 & 0xff) + 1u;
+            struct { uint32_t cattr, nlb; uint64_t slba; } r[256];
+            uint32_t bytes = nr * 16u;
+            struct iovec iov[4];
+            uint64_t pas[4];
+            uint32_t lens[4];
+            int n = prp_iov(nv, cmd->prp1, cmd->prp2, bytes, iov, pas, lens);
+            if (n < 0) return 0;
+            uint8_t *dst = (uint8_t *)r;
+            for (int i = 0; i < n; i++) {
+                memcpy(dst, iov[i].iov_base, iov[i].iov_len);
+                dst += iov[i].iov_len;
+            }
+            for (uint32_t i = 0; i < nr; i++) {
+                uint64_t off = r[i].slba * 512ull, len = (uint64_t)r[i].nlb * 512ull;
+                if (off < nv->disk->size && len <= nv->disk->size - off) punch(nv->disk, off, len);
+            }
+        }
+        return 0;
+    }
     default:
-        status = 0x0001; /* Invalid Command Opcode */
-        break;
+        return 0x0001; /* Invalid Command Opcode */
     }
+}
 
-    post_cqe(nv, sq, sqid, cmd->cid, 0, status);
+/* Synchronous fallback (HV_NVME_SYNC, or before the workers exist). */
+static void process_io_cmd(HvNvme *nv, HvNvmeSq *sq, uint16_t sqid, const NvmeCmd *cmd) {
+    post_cqe(nv, sq, sqid, cmd->cid, 0, exec_io(nv, cmd));
+}
+
+static void *nvme_worker(void *opaque) {
+    HvNvme *nv = opaque;
+    for (;;) {
+        pthread_mutex_lock(&nv->wmu);
+        while (nv->fence || nv->claimed == nv->submitted) pthread_cond_wait(&nv->wcv, &nv->wmu);
+        HvNvmeReq *r = &nv->ring[nv->claimed % HV_NVME_RING];
+        const NvmeCmd *cmd = (const NvmeCmd *)r->cmd;
+        int fence = cmd->opc == 0x00; /* Flush: everything before it first, nothing after it meanwhile */
+        nv->claimed++;
+        if (fence) {
+            nv->fence = 1;
+            while (nv->inflight) pthread_cond_wait(&nv->done_cv, &nv->wmu);
+        }
+        nv->inflight++;
+        pthread_mutex_unlock(&nv->wmu);
+
+        r->status = exec_io(nv, cmd);
+
+        pthread_mutex_lock(&nv->wmu);
+        __atomic_store_n(&r->done, 1, __ATOMIC_RELEASE);
+        nv->inflight--;
+        nv->completed++;
+        if (fence) {
+            nv->fence = 0;
+            pthread_cond_broadcast(&nv->wcv);
+        }
+        pthread_cond_broadcast(&nv->done_cv);
+        pthread_mutex_unlock(&nv->wmu);
+        hv_machine_wake(nv->m); /* CPU 0 posts the completion */
+    }
+    return NULL;
+}
+
+/* CPU thread: move commands from an I/O SQ into the worker ring while it has room. */
+static void submit_sq(HvNvme *nv, uint16_t qid) {
+    HvNvmeSq *sq = &nv->sq[qid];
+    int any = 0;
+    nv->backlog &= ~(1u << qid);
+    while (sq->valid && sq->size && sq->head != sq->tail) {
+        if (nv->submitted - nv->published >= HV_NVME_RING) {
+            nv->backlog |= 1u << qid;
+            break;
+        }
+        HvNvmeReq *r = &nv->ring[nv->submitted % HV_NVME_RING];
+        uint64_t cmd_pa = sq->pa + (uint64_t)sq->head * 64u;
+        if (hv_phys_read(nv->m, cmd_pa, r->cmd, 64) != 0) break;
+        if (++sq->head >= sq->size) sq->head = 0;
+        r->sqid = qid;
+        r->status = 0;
+        r->posted = 0;
+        __atomic_store_n(&r->done, 0, __ATOMIC_RELAXED);
+        pthread_mutex_lock(&nv->wmu);
+        nv->submitted++;
+        pthread_mutex_unlock(&nv->wmu);
+        any = 1;
+    }
+    if (any) pthread_cond_broadcast(&nv->wcv);
+}
+
+/* CPU thread (nv->mu held): write the CQEs of finished commands, free their slots. */
+static void publish(HvNvme *nv) {
+    for (uint32_t i = nv->published; i != nv->submitted; i++) {
+        HvNvmeReq *r = &nv->ring[i % HV_NVME_RING];
+        if (r->posted || !__atomic_load_n(&r->done, __ATOMIC_ACQUIRE)) continue;
+        const NvmeCmd *cmd = (const NvmeCmd *)r->cmd;
+        HvNvmeSq *sq = &nv->sq[r->sqid];
+        if (sq->valid) post_cqe(nv, sq, r->sqid, cmd->cid, 0, r->status);
+        r->posted = 1;
+    }
+    while (nv->published != nv->submitted && nv->ring[nv->published % HV_NVME_RING].posted) nv->published++;
+    if (nv->backlog)
+        for (uint16_t q = 1; q < HV_NVME_MAX_QUEUES; q++)
+            if (nv->backlog & (1u << q)) submit_sq(nv, q);
+}
+
+/* Waits until the workers are idle and posts what they finished (queue deletion, reset). */
+static void quiesce(HvNvme *nv) {
+    if (!nv->async) return;
+    for (;;) {
+        pthread_mutex_lock(&nv->wmu);
+        int idle = nv->completed == nv->submitted;
+        pthread_mutex_unlock(&nv->wmu);
+        if (idle) break;
+        usleep(50);
+    }
+    publish(nv);
+}
+
+void hv_nvme_poll(HvNvme *nv) {
+    if (!nv || !nv->async) return;
+    if (nv->published == __atomic_load_n(&nv->submitted, __ATOMIC_ACQUIRE) && !nv->backlog) return;
+    pthread_mutex_lock(&nv->mu);
+    publish(nv);
+    pthread_mutex_unlock(&nv->mu);
 }
 
 static void drain_sq(HvNvme *nv, uint16_t qid) {
     HvNvmeSq *sq = &nv->sq[qid];
     if (!sq->valid || !sq->size) return;
+    if (qid != 0 && nv->async) {
+        submit_sq(nv, qid);
+        return;
+    }
     int guard = 0;
     while (sq->head != sq->tail && guard++ < 4096) {
         NvmeCmd cmd;
@@ -464,6 +668,8 @@ static void drain_sq(HvNvme *nv, uint16_t qid) {
 }
 
 static void nvme_reset_ctrl(HvNvme *nv) {
+    quiesce(nv);
+    nv->backlog = 0;
     memset(nv->sq, 0, sizeof nv->sq);
     memset(nv->cq, 0, sizeof nv->cq);
     nv->csts = 0;
@@ -573,6 +779,7 @@ static void nvme_bar_write(HvPciDev *d, int bar, uint64_t off, uint64_t val, uns
         }
         uint32_t shn = (w >> 14) & 3;
         if (shn != 0) {
+            quiesce(nv);
             hv_disk_flush(nv->disk);
             nv->csts = (nv->csts & ~(3u << 2)) | (2u << 2); /* SHST = 2 (shutdown complete) */
         }
@@ -612,5 +819,26 @@ HvNvme *hv_nvme_create(HvMachine *m, HvPcie *bus, HvDisk *disk, const char *seri
     nv->pci.bar_read = nvme_bar_read;
     nv->pci.bar_write = nvme_bar_write;
     hv_pcie_attach(bus, &nv->pci);
+
+    pthread_mutex_init(&nv->wmu, NULL);
+    pthread_cond_init(&nv->wcv, NULL);
+    pthread_cond_init(&nv->done_cv, NULL);
+    if (!getenv("HV_NVME_SYNC")) {
+        int started = 0;
+        for (int i = 0; i < HV_NVME_WORKERS; i++) {
+            pthread_attr_t a;
+            pthread_attr_init(&a);
+            pthread_attr_setstacksize(&a, 256 << 10); /* iovec arrays live on the stack */
+#ifdef __APPLE__
+            pthread_attr_set_qos_class_np(&a, QOS_CLASS_USER_INITIATED, 0);
+#endif
+            if (pthread_create(&nv->worker[i], &a, nvme_worker, nv) == 0) {
+                pthread_detach(nv->worker[i]);
+                started++;
+            }
+            pthread_attr_destroy(&a);
+        }
+        nv->async = started > 0;
+    }
     return nv;
 }
